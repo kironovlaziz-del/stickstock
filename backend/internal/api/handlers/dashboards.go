@@ -1,0 +1,570 @@
+package handlers
+
+import (
+	"context"
+	"crypto/rand"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"stickstock/backend/internal/api/middleware"
+)
+
+type DashboardHandler struct {
+	DB *sql.DB
+}
+
+var allowedChartTypes = map[string]bool{
+	"line": true, "bar": true, "pie": true, "heatmap": true,
+	"table": true, "boxplot": true, "scatter": true, "treemap": true,
+}
+
+type dashboardSummary struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Role      string    `json:"role"` // "owner" | "editor" | "viewer"
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type widgetResponse struct {
+	ID           string          `json:"id"`
+	DashboardID  string          `json:"dashboard_id"`
+	SavedQueryID string          `json:"saved_query_id"`
+	ChartType    string          `json:"chart_type"`
+	Config       json.RawMessage `json:"config"`
+}
+
+type dashboardDetailResponse struct {
+	ID        string           `json:"id"`
+	Name      string           `json:"name"`
+	Layout    json.RawMessage  `json:"layout"`
+	Role      string           `json:"role"`
+	CreatedAt time.Time        `json:"created_at"`
+	Widgets   []widgetResponse `json:"widgets"`
+}
+
+// dashboardRole returns the caller's access level for a dashboard:
+// "owner" (dashboards.owner_id), "editor"/"viewer" (a row in
+// dashboard_collaborators), or an error if they have no access at all —
+// callers treat that error the same as "not found" so a dashboard's mere
+// existence isn't leaked to someone with no access to it.
+func dashboardRole(ctx context.Context, db *sql.DB, dashboardID, userID string) (string, error) {
+	var ownerID string
+	if err := db.QueryRowContext(ctx,
+		`SELECT owner_id FROM dashboards WHERE id = $1`, dashboardID,
+	).Scan(&ownerID); err != nil {
+		return "", err
+	}
+	if ownerID == userID {
+		return "owner", nil
+	}
+
+	var role string
+	if err := db.QueryRowContext(ctx,
+		`SELECT role FROM dashboard_collaborators WHERE dashboard_id = $1 AND user_id = $2`,
+		dashboardID, userID,
+	).Scan(&role); err != nil {
+		return "", fmt.Errorf("no access")
+	}
+	return role, nil
+}
+
+func canEdit(role string) bool { return role == "owner" || role == "editor" }
+
+// --- Dashboard CRUD ---
+
+type createDashboardRequest struct {
+	Name   string          `json:"name"`
+	Layout json.RawMessage `json:"layout"`
+}
+
+func (h *DashboardHandler) Create(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.UserIDFromContext(r.Context())
+
+	var req createDashboardRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		writeJSONError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	layout := req.Layout
+	if len(layout) == 0 {
+		layout = json.RawMessage("[]")
+	}
+
+	var resp dashboardDetailResponse
+	var layoutBytes []byte
+	err := h.DB.QueryRowContext(r.Context(),
+		`INSERT INTO dashboards (owner_id, name, layout) VALUES ($1, $2, $3)
+		 RETURNING id, name, layout, created_at`,
+		userID, req.Name, string(layout),
+	).Scan(&resp.ID, &resp.Name, &layoutBytes, &resp.CreatedAt)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not create dashboard")
+		return
+	}
+	resp.Layout = layoutBytes
+	resp.Role = "owner"
+	resp.Widgets = []widgetResponse{}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(resp)
+}
+
+// List returns dashboards the caller owns AND ones shared with them as a
+// collaborator.
+func (h *DashboardHandler) List(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.UserIDFromContext(r.Context())
+
+	rows, err := h.DB.QueryContext(r.Context(), `
+		SELECT id, name, role, created_at FROM (
+			SELECT id, name, 'owner' AS role, created_at FROM dashboards WHERE owner_id = $1
+			UNION
+			SELECT d.id, d.name, dc.role, d.created_at
+			FROM dashboards d
+			JOIN dashboard_collaborators dc ON dc.dashboard_id = d.id
+			WHERE dc.user_id = $1
+		) combined
+		ORDER BY created_at DESC`, userID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not list dashboards")
+		return
+	}
+	defer rows.Close()
+
+	out := []dashboardSummary{}
+	for rows.Next() {
+		var d dashboardSummary
+		if err := rows.Scan(&d.ID, &d.Name, &d.Role, &d.CreatedAt); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "could not read dashboards")
+			return
+		}
+		out = append(out, d)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+// Get returns a dashboard along with its widgets, so the frontend can
+// render the whole grid in one call. Available to owner + any collaborator.
+func (h *DashboardHandler) Get(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.UserIDFromContext(r.Context())
+	id := r.PathValue("id")
+
+	role, err := dashboardRole(r.Context(), h.DB, id, userID)
+	if err != nil {
+		writeJSONError(w, http.StatusNotFound, "dashboard not found")
+		return
+	}
+
+	var resp dashboardDetailResponse
+	var layoutBytes []byte
+	if err := h.DB.QueryRowContext(r.Context(),
+		`SELECT id, name, layout, created_at FROM dashboards WHERE id = $1`, id,
+	).Scan(&resp.ID, &resp.Name, &layoutBytes, &resp.CreatedAt); err != nil {
+		writeJSONError(w, http.StatusNotFound, "dashboard not found")
+		return
+	}
+	resp.Layout = layoutBytes
+	resp.Role = role
+
+	rows, err := h.DB.QueryContext(r.Context(),
+		`SELECT id, dashboard_id, saved_query_id, chart_type, config
+		 FROM dashboard_widgets WHERE dashboard_id = $1`, id)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not load widgets")
+		return
+	}
+	defer rows.Close()
+
+	resp.Widgets = []widgetResponse{}
+	for rows.Next() {
+		var wdg widgetResponse
+		var configBytes []byte
+		if err := rows.Scan(&wdg.ID, &wdg.DashboardID, &wdg.SavedQueryID, &wdg.ChartType, &configBytes); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "could not read widgets")
+			return
+		}
+		wdg.Config = configBytes
+		resp.Widgets = append(resp.Widgets, wdg)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+type updateDashboardRequest struct {
+	Name   string          `json:"name"`
+	Layout json.RawMessage `json:"layout"`
+}
+
+// Update changes the dashboard's name and/or its react-grid-layout
+// positions. Both fields are optional; send whichever changed. Owner or
+// editor collaborators can do this; viewers can't.
+func (h *DashboardHandler) Update(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.UserIDFromContext(r.Context())
+	id := r.PathValue("id")
+
+	role, err := dashboardRole(r.Context(), h.DB, id, userID)
+	if err != nil || !canEdit(role) {
+		writeJSONError(w, http.StatusNotFound, "dashboard not found")
+		return
+	}
+
+	var req updateDashboardRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Name == "" && len(req.Layout) == 0 {
+		writeJSONError(w, http.StatusBadRequest, "name or layout is required")
+		return
+	}
+
+	setClauses := []string{}
+	args := []interface{}{}
+	argN := 1
+	if req.Name != "" {
+		setClauses = append(setClauses, fmt.Sprintf("name = $%d", argN))
+		args = append(args, req.Name)
+		argN++
+	}
+	if len(req.Layout) > 0 {
+		setClauses = append(setClauses, fmt.Sprintf("layout = $%d", argN))
+		args = append(args, string(req.Layout))
+		argN++
+	}
+	args = append(args, id)
+
+	stmt := fmt.Sprintf("UPDATE dashboards SET %s WHERE id = $%d", strings.Join(setClauses, ", "), argN)
+	if _, err := h.DB.ExecContext(r.Context(), stmt, args...); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not update dashboard")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Delete cascades to dashboard_widgets, dashboard_collaborators, and
+// widget_comments via FK ON DELETE CASCADE. Owner only.
+func (h *DashboardHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.UserIDFromContext(r.Context())
+	id := r.PathValue("id")
+
+	res, err := h.DB.ExecContext(r.Context(),
+		`DELETE FROM dashboards WHERE id = $1 AND owner_id = $2`, id, userID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not delete dashboard")
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeJSONError(w, http.StatusNotFound, "dashboard not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Widgets ---
+
+type addWidgetRequest struct {
+	SavedQueryID string          `json:"saved_query_id"`
+	ChartType    string          `json:"chart_type"`
+	Config       json.RawMessage `json:"config"`
+}
+
+func (h *DashboardHandler) AddWidget(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.UserIDFromContext(r.Context())
+	dashboardID := r.PathValue("id")
+
+	role, err := dashboardRole(r.Context(), h.DB, dashboardID, userID)
+	if err != nil || !canEdit(role) {
+		writeJSONError(w, http.StatusNotFound, "dashboard not found")
+		return
+	}
+
+	var req addWidgetRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SavedQueryID == "" || req.ChartType == "" {
+		writeJSONError(w, http.StatusBadRequest, "saved_query_id and chart_type are required")
+		return
+	}
+	if !allowedChartTypes[req.ChartType] {
+		writeJSONError(w, http.StatusBadRequest, "unsupported chart_type")
+		return
+	}
+
+	// The saved query must belong to the dashboard's owner before it can
+	// be attached — an editor collaborator can arrange widgets but
+	// shouldn't be able to pull in a query from someone else's data.
+	var dashboardOwner, queryOwner string
+	if err := h.DB.QueryRowContext(r.Context(), `SELECT owner_id FROM dashboards WHERE id = $1`, dashboardID).Scan(&dashboardOwner); err != nil {
+		writeJSONError(w, http.StatusNotFound, "dashboard not found")
+		return
+	}
+	if err := h.DB.QueryRowContext(r.Context(), `SELECT owner_id FROM saved_queries WHERE id = $1`, req.SavedQueryID).Scan(&queryOwner); err != nil || queryOwner != dashboardOwner {
+		writeJSONError(w, http.StatusNotFound, "saved query not found")
+		return
+	}
+
+	config := req.Config
+	if len(config) == 0 {
+		config = json.RawMessage("{}")
+	}
+
+	var widgetID string
+	err = h.DB.QueryRowContext(r.Context(),
+		`INSERT INTO dashboard_widgets (dashboard_id, saved_query_id, chart_type, config)
+		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		dashboardID, req.SavedQueryID, req.ChartType, string(config),
+	).Scan(&widgetID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not add widget")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(widgetResponse{
+		ID: widgetID, DashboardID: dashboardID, SavedQueryID: req.SavedQueryID,
+		ChartType: req.ChartType, Config: config,
+	})
+}
+
+type updateWidgetRequest struct {
+	ChartType string          `json:"chart_type"`
+	Config    json.RawMessage `json:"config"`
+}
+
+func (h *DashboardHandler) UpdateWidget(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.UserIDFromContext(r.Context())
+	dashboardID := r.PathValue("id")
+	widgetID := r.PathValue("widget_id")
+
+	role, err := dashboardRole(r.Context(), h.DB, dashboardID, userID)
+	if err != nil || !canEdit(role) {
+		writeJSONError(w, http.StatusNotFound, "dashboard not found")
+		return
+	}
+
+	var req updateWidgetRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.ChartType != "" && !allowedChartTypes[req.ChartType] {
+		writeJSONError(w, http.StatusBadRequest, "unsupported chart_type")
+		return
+	}
+
+	setClauses := []string{}
+	args := []interface{}{}
+	argN := 1
+	if req.ChartType != "" {
+		setClauses = append(setClauses, fmt.Sprintf("chart_type = $%d", argN))
+		args = append(args, req.ChartType)
+		argN++
+	}
+	if len(req.Config) > 0 {
+		setClauses = append(setClauses, fmt.Sprintf("config = $%d", argN))
+		args = append(args, string(req.Config))
+		argN++
+	}
+	if len(setClauses) == 0 {
+		writeJSONError(w, http.StatusBadRequest, "chart_type or config is required")
+		return
+	}
+	args = append(args, widgetID, dashboardID)
+
+	stmt := fmt.Sprintf(
+		"UPDATE dashboard_widgets SET %s WHERE id = $%d AND dashboard_id = $%d",
+		strings.Join(setClauses, ", "), argN, argN+1,
+	)
+	res, err := h.DB.ExecContext(r.Context(), stmt, args...)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not update widget")
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeJSONError(w, http.StatusNotFound, "widget not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *DashboardHandler) DeleteWidget(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.UserIDFromContext(r.Context())
+	dashboardID := r.PathValue("id")
+	widgetID := r.PathValue("widget_id")
+
+	role, err := dashboardRole(r.Context(), h.DB, dashboardID, userID)
+	if err != nil || !canEdit(role) {
+		writeJSONError(w, http.StatusNotFound, "dashboard not found")
+		return
+	}
+
+	res, err := h.DB.ExecContext(r.Context(),
+		`DELETE FROM dashboard_widgets WHERE id = $1 AND dashboard_id = $2`, widgetID, dashboardID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not delete widget")
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeJSONError(w, http.StatusNotFound, "widget not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Collaborators (owner only manages these) ---
+
+type collaboratorResponse struct {
+	UserID string `json:"user_id"`
+	Role   string `json:"role"`
+}
+
+func (h *DashboardHandler) ListCollaborators(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.UserIDFromContext(r.Context())
+	dashboardID := r.PathValue("id")
+
+	if _, err := dashboardRole(r.Context(), h.DB, dashboardID, userID); err != nil {
+		writeJSONError(w, http.StatusNotFound, "dashboard not found")
+		return
+	}
+
+	rows, err := h.DB.QueryContext(r.Context(),
+		`SELECT user_id, role FROM dashboard_collaborators WHERE dashboard_id = $1`, dashboardID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not list collaborators")
+		return
+	}
+	defer rows.Close()
+
+	out := []collaboratorResponse{}
+	for rows.Next() {
+		var c collaboratorResponse
+		if err := rows.Scan(&c.UserID, &c.Role); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "could not read collaborators")
+			return
+		}
+		out = append(out, c)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+type addCollaboratorRequest struct {
+	UserID string `json:"user_id"` // the Supabase auth user id (profiles.id) of the person to add
+	Role   string `json:"role"`    // "editor" | "viewer"
+}
+
+func (h *DashboardHandler) AddCollaborator(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.UserIDFromContext(r.Context())
+	dashboardID := r.PathValue("id")
+
+	role, err := dashboardRole(r.Context(), h.DB, dashboardID, userID)
+	if err != nil || role != "owner" {
+		writeJSONError(w, http.StatusForbidden, "only the owner can manage collaborators")
+		return
+	}
+
+	var req addCollaboratorRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserID == "" {
+		writeJSONError(w, http.StatusBadRequest, "user_id is required")
+		return
+	}
+	if req.Role != "editor" && req.Role != "viewer" {
+		writeJSONError(w, http.StatusBadRequest, `role must be "editor" or "viewer"`)
+		return
+	}
+
+	if _, err := h.DB.ExecContext(r.Context(),
+		`INSERT INTO dashboard_collaborators (dashboard_id, user_id, role) VALUES ($1, $2, $3)
+		 ON CONFLICT (dashboard_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
+		dashboardID, req.UserID, req.Role,
+	); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not add collaborator")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *DashboardHandler) RemoveCollaborator(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.UserIDFromContext(r.Context())
+	dashboardID := r.PathValue("id")
+	collaboratorUserID := r.PathValue("user_id")
+
+	role, err := dashboardRole(r.Context(), h.DB, dashboardID, userID)
+	if err != nil || role != "owner" {
+		writeJSONError(w, http.StatusForbidden, "only the owner can manage collaborators")
+		return
+	}
+
+	if _, err := h.DB.ExecContext(r.Context(),
+		`DELETE FROM dashboard_collaborators WHERE dashboard_id = $1 AND user_id = $2`,
+		dashboardID, collaboratorUserID,
+	); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not remove collaborator")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Sharing (public read-only link) ---
+
+func randomShareToken() (string, error) {
+	b := make([]byte, 24) // longer than the upload-table suffix — this token acts as a bearer credential, not just an opaque name
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func (h *DashboardHandler) CreateShareLink(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.UserIDFromContext(r.Context())
+	dashboardID := r.PathValue("id")
+
+	role, err := dashboardRole(r.Context(), h.DB, dashboardID, userID)
+	if err != nil || role != "owner" {
+		writeJSONError(w, http.StatusForbidden, "only the owner can share this dashboard")
+		return
+	}
+
+	token, err := randomShareToken()
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not generate share token")
+		return
+	}
+
+	if _, err := h.DB.ExecContext(r.Context(),
+		`UPDATE dashboards SET share_token = $1 WHERE id = $2`, token, dashboardID,
+	); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not enable sharing")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"share_token": token})
+}
+
+func (h *DashboardHandler) RevokeShareLink(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.UserIDFromContext(r.Context())
+	dashboardID := r.PathValue("id")
+
+	role, err := dashboardRole(r.Context(), h.DB, dashboardID, userID)
+	if err != nil || role != "owner" {
+		writeJSONError(w, http.StatusForbidden, "only the owner can manage sharing")
+		return
+	}
+
+	if _, err := h.DB.ExecContext(r.Context(),
+		`UPDATE dashboards SET share_token = NULL WHERE id = $1`, dashboardID,
+	); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not revoke sharing")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
