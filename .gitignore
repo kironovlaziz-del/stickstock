@@ -1,4 +1,5 @@
 .env
+.local
 *.log
 tmp/
 *.exe
@@ -6,3 +7,22 @@ tmp/
 __pycache__/
 .idea/
 .vscode/
+# Секреты и ключи
+*.pem
+*.key
+*.crt
+*.p12
+*.jks
+*.secret
+*.token
+secrets/
+credentials/
+*.pwd
+
+# Системные файлы
+.DS_Store
+Thumbs.db
+
+# Файлы локальных настроек (уже есть .local, но продублируем для надёжности)
+*.local
+*.env.local
