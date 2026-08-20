@@ -10,6 +10,7 @@ import { api } from "@/lib/api";
 import type { DashboardDetail, QueryResult } from "@/lib/types";
 import { mergeLayout, GRID_COLS } from "@/lib/dashboardLayout";
 import ChartWidget from "@/components/ChartWidget";
+import CommentThread from "@/components/CommentThread";
 
 const Grid = WidthProvider(GridLayout);
 
@@ -46,17 +47,35 @@ export default function DashboardViewPage() {
   if (!dashboard) return <p className="text-sm text-slate-500">Loading...</p>;
 
   const layout = mergeLayout(dashboard.widgets, dashboard.layout);
+  const canEdit = dashboard.role === "owner" || dashboard.role === "editor";
 
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-extrabold tracking-tight">{dashboard.name}</h1>
-        <Link
-          href={`/dashboards/${dashboard.id}/edit`}
-          className="focus-ring rounded-lg border border-white/10 px-4 py-2 text-sm font-medium hover:bg-white/5"
-        >
-          Edit widgets
-        </Link>
+        <div>
+          <h1 className="text-2xl font-extrabold tracking-tight">{dashboard.name}</h1>
+          {dashboard.role !== "owner" && (
+            <p className="mt-1 text-xs text-slate-500">Shared with you — {dashboard.role}</p>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {dashboard.role === "owner" && (
+            <Link
+              href={`/dashboards/${dashboard.id}/share`}
+              className="focus-ring rounded-lg border border-white/10 px-4 py-2 text-sm font-medium hover:bg-white/5"
+            >
+              Share
+            </Link>
+          )}
+          {canEdit && (
+            <Link
+              href={`/dashboards/${dashboard.id}/edit`}
+              className="focus-ring rounded-lg border border-white/10 px-4 py-2 text-sm font-medium hover:bg-white/5"
+            >
+              Edit widgets
+            </Link>
+          )}
+        </div>
       </div>
 
       {dashboard.widgets.length === 0 ? (
@@ -72,13 +91,16 @@ export default function DashboardViewPage() {
           isResizable={false}
         >
           {dashboard.widgets.map((w) => (
-            <div key={w.id} className="glass overflow-hidden rounded-2xl p-5">
+            <div key={w.id} className="glass flex flex-col overflow-hidden rounded-2xl p-5">
               <p className="mb-3 text-xs font-medium uppercase tracking-wide text-slate-400">{w.chart_type}</p>
-              {results[w.id] ? (
-                <ChartWidget result={results[w.id]} chartType={w.chart_type} />
-              ) : (
-                <p className="text-sm text-slate-500">Loading...</p>
-              )}
+              <div className="min-h-0 flex-1 overflow-auto">
+                {results[w.id] ? (
+                  <ChartWidget result={results[w.id]} chartType={w.chart_type} />
+                ) : (
+                  <p className="text-sm text-slate-500">Loading...</p>
+                )}
+              </div>
+              <CommentThread dashboardId={dashboard.id} widgetId={w.id} />
             </div>
           ))}
         </Grid>

@@ -28,7 +28,5 @@
   "common.export": "Содирот",
   "ai.assistant": "Ёрдамчии AI",
   "ai.ask_placeholder": "Дар бораи маълумот пурсед...",
-  "nav.osint": "Ҷустуҷӯи OSINT",
-  "nav.reports": "Ҳисоботҳо",
-  "nav.admin": "Идоракунӣ"
+  "nav.osint": "Ҷустуҷӯи OSINT"
 }

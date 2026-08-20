@@ -28,7 +28,5 @@
   "common.export": "Eksport qilish",
   "ai.assistant": "AI-yordamchi",
   "ai.ask_placeholder": "Ma'lumotlar haqida so'rang...",
-  "nav.osint": "OSINT-qidiruv",
-  "nav.reports": "Hisobotlar",
-  "nav.admin": "Boshqaruv"
+  "nav.osint": "OSINT-qidiruv"
 }

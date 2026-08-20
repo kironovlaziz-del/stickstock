@@ -28,7 +28,5 @@
   "common.export": "Экспорт",
   "ai.assistant": "AI-ассистент",
   "ai.ask_placeholder": "Спросите о данных...",
-  "nav.osint": "OSINT-поиск",
-  "nav.reports": "Отчёты",
-  "nav.admin": "Админка"
+  "nav.osint": "OSINT-поиск"
 }

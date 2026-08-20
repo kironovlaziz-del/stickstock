@@ -28,7 +28,5 @@
   "common.export": "Экспорттау",
   "ai.assistant": "AI-көмекші",
   "ai.ask_placeholder": "Деректер туралы сұраңыз...",
-  "nav.osint": "OSINT-іздеу",
-  "nav.reports": "Есептер",
-  "nav.admin": "Басқару"
+  "nav.osint": "OSINT-іздеу"
 }

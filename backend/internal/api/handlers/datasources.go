@@ -37,7 +37,7 @@ func (h *DataSourceHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	var out []dataSourceResponse
+	out := []dataSourceResponse{}
 	for rows.Next() {
 		var d dataSourceResponse
 		if err := rows.Scan(&d.ID, &d.Name, &d.Kind); err != nil {

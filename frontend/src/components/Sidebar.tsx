@@ -1,19 +1,32 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
+import { api } from "@/lib/api";
 
 const NAV = [
   { href: "/dashboards", key: "nav.dashboards", icon: "▦" },
   { href: "/queries", key: "nav.queries", icon: "⌁" },
   { href: "/connections", key: "nav.connections", icon: "◈" },
+  { href: "/reports", key: "nav.reports", icon: "📅" },
   { href: "/osint", key: "nav.osint", icon: "🔍" },
 ];
 
 export default function Sidebar() {
   const pathname = usePathname();
   const { t } = useI18n();
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    api
+      .me()
+      .then((profile) => setIsAdmin(profile.is_admin))
+      .catch(() => {});
+  }, []);
+
+  const items = isAdmin ? [...NAV, { href: "/admin", key: "nav.admin", icon: "🛡️" }] : NAV;
 
   return (
     <aside className="glass flex w-60 flex-col gap-1 border-r border-white/5 p-4">
@@ -22,7 +35,7 @@ export default function Sidebar() {
         <span className="text-base font-bold tracking-tight">{t("app.name")}</span>
       </div>
 
-      {NAV.map((item) => {
+      {items.map((item) => {
         const active = pathname?.startsWith(item.href);
         return (
           <Link

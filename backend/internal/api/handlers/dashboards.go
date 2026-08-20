@@ -39,12 +39,13 @@ type widgetResponse struct {
 }
 
 type dashboardDetailResponse struct {
-	ID        string           `json:"id"`
-	Name      string           `json:"name"`
-	Layout    json.RawMessage  `json:"layout"`
-	Role      string           `json:"role"`
-	CreatedAt time.Time        `json:"created_at"`
-	Widgets   []widgetResponse `json:"widgets"`
+	ID           string           `json:"id"`
+	Name         string           `json:"name"`
+	Layout       json.RawMessage  `json:"layout"`
+	Role         string           `json:"role"`
+	ShareEnabled bool             `json:"share_enabled"`
+	CreatedAt    time.Time        `json:"created_at"`
+	Widgets      []widgetResponse `json:"widgets"`
 }
 
 // dashboardRole returns the caller's access level for a dashboard:
@@ -164,14 +165,16 @@ func (h *DashboardHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	var resp dashboardDetailResponse
 	var layoutBytes []byte
+	var shareToken sql.NullString
 	if err := h.DB.QueryRowContext(r.Context(),
-		`SELECT id, name, layout, created_at FROM dashboards WHERE id = $1`, id,
-	).Scan(&resp.ID, &resp.Name, &layoutBytes, &resp.CreatedAt); err != nil {
+		`SELECT id, name, layout, share_token, created_at FROM dashboards WHERE id = $1`, id,
+	).Scan(&resp.ID, &resp.Name, &layoutBytes, &shareToken, &resp.CreatedAt); err != nil {
 		writeJSONError(w, http.StatusNotFound, "dashboard not found")
 		return
 	}
 	resp.Layout = layoutBytes
 	resp.Role = role
+	resp.ShareEnabled = shareToken.Valid
 
 	rows, err := h.DB.QueryContext(r.Context(),
 		`SELECT id, dashboard_id, saved_query_id, chart_type, config
@@ -422,6 +425,7 @@ func (h *DashboardHandler) DeleteWidget(w http.ResponseWriter, r *http.Request) 
 
 type collaboratorResponse struct {
 	UserID string `json:"user_id"`
+	Email  string `json:"email"`
 	Role   string `json:"role"`
 }
 
@@ -434,8 +438,11 @@ func (h *DashboardHandler) ListCollaborators(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	rows, err := h.DB.QueryContext(r.Context(),
-		`SELECT user_id, role FROM dashboard_collaborators WHERE dashboard_id = $1`, dashboardID)
+	rows, err := h.DB.QueryContext(r.Context(), `
+		SELECT dc.user_id, u.email, dc.role
+		FROM dashboard_collaborators dc
+		JOIN auth.users u ON u.id = dc.user_id
+		WHERE dc.dashboard_id = $1`, dashboardID)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "could not list collaborators")
 		return
@@ -445,7 +452,7 @@ func (h *DashboardHandler) ListCollaborators(w http.ResponseWriter, r *http.Requ
 	out := []collaboratorResponse{}
 	for rows.Next() {
 		var c collaboratorResponse
-		if err := rows.Scan(&c.UserID, &c.Role); err != nil {
+		if err := rows.Scan(&c.UserID, &c.Email, &c.Role); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "could not read collaborators")
 			return
 		}
@@ -457,8 +464,8 @@ func (h *DashboardHandler) ListCollaborators(w http.ResponseWriter, r *http.Requ
 }
 
 type addCollaboratorRequest struct {
-	UserID string `json:"user_id"` // the Supabase auth user id (profiles.id) of the person to add
-	Role   string `json:"role"`    // "editor" | "viewer"
+	Email string `json:"email"` // looked up against auth.users — nobody types a UUID in a UI
+	Role  string `json:"role"`  // "editor" | "viewer"
 }
 
 func (h *DashboardHandler) AddCollaborator(w http.ResponseWriter, r *http.Request) {
@@ -472,8 +479,8 @@ func (h *DashboardHandler) AddCollaborator(w http.ResponseWriter, r *http.Reques
 	}
 
 	var req addCollaboratorRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserID == "" {
-		writeJSONError(w, http.StatusBadRequest, "user_id is required")
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Email == "" {
+		writeJSONError(w, http.StatusBadRequest, "email is required")
 		return
 	}
 	if req.Role != "editor" && req.Role != "viewer" {
@@ -481,10 +488,22 @@ func (h *DashboardHandler) AddCollaborator(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	var collaboratorID string
+	if err := h.DB.QueryRowContext(r.Context(),
+		`SELECT id FROM auth.users WHERE email = $1`, req.Email,
+	).Scan(&collaboratorID); err != nil {
+		writeJSONError(w, http.StatusNotFound, "no user found with that email — they need to have signed up first")
+		return
+	}
+	if collaboratorID == userID {
+		writeJSONError(w, http.StatusBadRequest, "you already own this dashboard")
+		return
+	}
+
 	if _, err := h.DB.ExecContext(r.Context(),
 		`INSERT INTO dashboard_collaborators (dashboard_id, user_id, role) VALUES ($1, $2, $3)
 		 ON CONFLICT (dashboard_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
-		dashboardID, req.UserID, req.Role,
+		dashboardID, collaboratorID, req.Role,
 	); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "could not add collaborator")
 		return

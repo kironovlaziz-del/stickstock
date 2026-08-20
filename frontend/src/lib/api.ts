@@ -10,6 +10,11 @@ import type {
   Widget,
   TableInfo,
   LayoutItem,
+  Collaborator,
+  Comment,
+  ScheduledReport,
+  AdminUser,
+  AdminStats,
 } from "@/lib/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
@@ -145,4 +150,51 @@ export const api = {
 
   osintLookup: (body: { type: "whois" | "dns" | "breach"; target: string }) =>
     request<Record<string, unknown>>("/osint/lookup", { method: "POST", body: JSON.stringify(body) }),
+
+  // --- Sharing & collaborators ---
+  createShareLink: (dashboardId: string) =>
+    request<{ share_token: string }>(`/dashboards/${dashboardId}/share`, { method: "POST" }),
+  revokeShareLink: (dashboardId: string) =>
+    request<void>(`/dashboards/${dashboardId}/share`, { method: "DELETE" }),
+  listCollaborators: (dashboardId: string) =>
+    request<Collaborator[]>(`/dashboards/${dashboardId}/collaborators`),
+  addCollaborator: (dashboardId: string, body: { email: string; role: "editor" | "viewer" }) =>
+    request<void>(`/dashboards/${dashboardId}/collaborators`, { method: "POST", body: JSON.stringify(body) }),
+  removeCollaborator: (dashboardId: string, userId: string) =>
+    request<void>(`/dashboards/${dashboardId}/collaborators/${userId}`, { method: "DELETE" }),
+
+  // --- Comments ---
+  listComments: (dashboardId: string, widgetId: string) =>
+    request<Comment[]>(`/dashboards/${dashboardId}/widgets/${widgetId}/comments`),
+  createComment: (dashboardId: string, widgetId: string, body: string) =>
+    request<Comment>(`/dashboards/${dashboardId}/widgets/${widgetId}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    }),
+  deleteComment: (commentId: string) => request<void>(`/comments/${commentId}`, { method: "DELETE" }),
+
+  // --- Scheduled reports ---
+  listReports: () => request<ScheduledReport[]>("/reports"),
+  createReport: (body: {
+    saved_query_id: string;
+    cron_expr: string;
+    delivery_kind: "email" | "telegram";
+    delivery_target: string;
+  }) => request<ScheduledReport>("/reports", { method: "POST", body: JSON.stringify(body) }),
+  updateReport: (
+    id: string,
+    body: Partial<{
+      cron_expr: string;
+      delivery_kind: "email" | "telegram";
+      delivery_target: string;
+      is_active: boolean;
+    }>
+  ) => request<void>(`/reports/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteReport: (id: string) => request<void>(`/reports/${id}`, { method: "DELETE" }),
+
+  // --- Admin ---
+  adminListUsers: () => request<AdminUser[]>("/admin/users"),
+  adminUpdateUser: (id: string, body: Partial<{ is_admin: boolean; is_blocked: boolean }>) =>
+    request<void>(`/admin/users/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  adminStats: () => request<AdminStats>("/admin/stats"),
 };

@@ -22,6 +22,7 @@ type ProfileHandler struct {
 type profileResponse struct {
 	ID        string    `json:"id"`
 	Locale    string    `json:"locale"`
+	IsAdmin   bool      `json:"is_admin"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -30,8 +31,8 @@ func (h *ProfileHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	var resp profileResponse
 	err := h.DB.QueryRowContext(r.Context(),
-		`SELECT id, locale, created_at FROM profiles WHERE id = $1`, userID,
-	).Scan(&resp.ID, &resp.Locale, &resp.CreatedAt)
+		`SELECT id, locale, is_admin, created_at FROM profiles WHERE id = $1`, userID,
+	).Scan(&resp.ID, &resp.Locale, &resp.IsAdmin, &resp.CreatedAt)
 	if err != nil {
 		// A signed-in user with no profile row means the on_auth_user_created
 		// trigger didn't fire (e.g. the migration was applied after they

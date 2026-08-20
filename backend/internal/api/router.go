@@ -40,7 +40,7 @@ func NewRouter(cfg *config.Config, database *sql.DB) http.Handler {
 	// Protected routes. cfg.JWTSecret is the Supabase project's JWT
 	// secret (Settings → API in the Supabase dashboard), not a secret
 	// this backend generates itself.
-	auth := middleware.RequireAuth(cfg.JWTSecret, database)
+	auth := middleware.RequireAuth(cfg.JWTSecret, cfg.SupabaseURL, database)
 	admin := middleware.RequireAdmin(database)
 	mux.Handle("GET /api/me", auth(http.HandlerFunc(profileHandler.Get)))
 	mux.Handle("PUT /api/me", auth(http.HandlerFunc(profileHandler.Update)))

@@ -13,6 +13,7 @@ type Config struct {
 	Port                string
 	DatabaseURL         string // Supabase Postgres connection string (Settings → Database)
 	JWTSecret           string // Supabase project's JWT secret (Settings → API) — verifies tokens Supabase Auth issues
+	SupabaseURL         string // e.g. https://xxxx.supabase.co — used to build the JWKS discovery URL for ES256 tokens
 	AnalyticsServiceURL string // internal URL of the Python analytics service, e.g. http://analytics-service:8000
 	LocalesDir          string
 	DefaultLocale       string
@@ -37,6 +38,7 @@ func Load() (*Config, error) {
 		Port:                getEnv("PORT", "8080"),
 		DatabaseURL:         os.Getenv("DATABASE_URL"),
 		JWTSecret:           os.Getenv("JWT_SECRET"),
+		SupabaseURL:         os.Getenv("SUPABASE_URL"),
 		AnalyticsServiceURL: getEnv("ANALYTICS_SERVICE_URL", "http://analytics-service:8000"),
 		LocalesDir:          getEnv("LOCALES_DIR", "/app/locales"),
 		DefaultLocale:       getEnv("DEFAULT_LOCALE", "en"),
