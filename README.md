@@ -149,6 +149,17 @@ POST /api/reports	                                                        Schedu
 Full OpenAPI documentation will be generated after we integrate swaggo/swag.
 
 
+## Testing
+
+Run all backend tests:
+
+```bash
+docker run --rm -v $(pwd)/backend:/app -w /app golang:1.22 go test -v ./...
+
+Or run specific package:
+docker run --rm -v $(pwd)/backend:/app -w /app golang:1.22 go test -v ./internal/analytics
+
+
 Future Roadmap
 
     Semantic layer – define reusable datasets, metrics, and dimensions.
@@ -159,7 +170,6 @@ Future Roadmap
 
     Export improvements – streaming export without the 1000‑row limit.
 
-    Tests & CI – unit and integration tests for all components.
 
 
 License
