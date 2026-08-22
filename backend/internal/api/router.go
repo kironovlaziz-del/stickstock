@@ -12,19 +12,21 @@ import (
 func NewRouter(cfg *config.Config, database *sql.DB) http.Handler {
 	mux := http.NewServeMux()
 
-	dsHandler := &handlers.DataSourceHandler{DB: database}
-	queryHandler := &handlers.QueryHandler{DB: database}
+	dsHandler := &handlers.DataSourceHandler{DB: database, EncryptionKey: cfg.EncryptionKey}
+	queryHandler := &handlers.QueryHandler{DB: database, EncryptionKey: cfg.EncryptionKey}
 	dashboardHandler := &handlers.DashboardHandler{DB: database}
 	profileHandler := &handlers.ProfileHandler{DB: database}
 	fileHandler := &handlers.FileHandler{DB: database, DatabaseURL: cfg.DatabaseURL}
 	reportHandler := &handlers.ReportHandler{DB: database}
-	exportHandler := &handlers.ExportHandler{DB: database}
-	schemaHandler := &handlers.SchemaHandler{DB: database}
+	exportHandler := &handlers.ExportHandler{DB: database, EncryptionKey: cfg.EncryptionKey}
+	schemaHandler := &handlers.SchemaHandler{DB: database, EncryptionKey: cfg.EncryptionKey}
 	lineageHandler := &handlers.LineageHandler{DB: database}
 	commentHandler := &handlers.CommentHandler{DB: database}
 	publicHandler := &handlers.PublicHandler{DB: database}
 	adminHandler := &handlers.AdminHandler{DB: database}
-	osintHandler := &handlers.OSINTHandler{HIBPAPIKey: cfg.HIBPAPIKey}
+
+	auth := middleware.RequireAuth(cfg.JWTSecret, cfg.SupabaseURL, database)
+	admin := middleware.RequireAdmin(database)
 
 	// Public routes. Registration/login now happen on the frontend via
 	// Supabase Auth (supabase-js) — this backend only verifies the JWTs
@@ -37,16 +39,13 @@ func NewRouter(cfg *config.Config, database *sql.DB) http.Handler {
 	mux.HandleFunc("GET /api/public/dashboards/{token}", publicHandler.GetDashboard)
 	mux.HandleFunc("POST /api/public/dashboards/{token}/widgets/{widget_id}/run", publicHandler.RunWidget)
 
-	// Protected routes. cfg.JWTSecret is the Supabase project's JWT
-	// secret (Settings → API in the Supabase dashboard), not a secret
-	// this backend generates itself.
-	auth := middleware.RequireAuth(cfg.JWTSecret, cfg.SupabaseURL, database)
-	admin := middleware.RequireAdmin(database)
+	// Protected routes.
 	mux.Handle("GET /api/me", auth(http.HandlerFunc(profileHandler.Get)))
 	mux.Handle("PUT /api/me", auth(http.HandlerFunc(profileHandler.Update)))
 
 	mux.Handle("GET /api/datasources", auth(http.HandlerFunc(dsHandler.List)))
 	mux.Handle("POST /api/datasources", auth(http.HandlerFunc(dsHandler.Create)))
+	mux.Handle("DELETE /api/datasources/{id}", auth(http.HandlerFunc(dsHandler.Delete)))
 	mux.Handle("POST /api/datasources/upload", auth(http.HandlerFunc(fileHandler.Upload)))
 	mux.Handle("GET /api/datasources/{id}/schema", auth(http.HandlerFunc(schemaHandler.Get)))
 
@@ -84,7 +83,6 @@ func NewRouter(cfg *config.Config, database *sql.DB) http.Handler {
 	mux.Handle("PUT /api/admin/users/{id}", auth(admin(http.HandlerFunc(adminHandler.UpdateUser))))
 	mux.Handle("GET /api/admin/stats", auth(admin(http.HandlerFunc(adminHandler.Stats))))
 
-	mux.Handle("POST /api/osint/lookup", auth(http.HandlerFunc(osintHandler.Lookup)))
 
 	mux.Handle("POST /api/reports", auth(http.HandlerFunc(reportHandler.Create)))
 	mux.Handle("GET /api/reports", auth(http.HandlerFunc(reportHandler.List)))

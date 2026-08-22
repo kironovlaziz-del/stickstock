@@ -11,7 +11,6 @@ const NAV = [
   { href: "/queries", key: "nav.queries", icon: "⌁" },
   { href: "/connections", key: "nav.connections", icon: "◈" },
   { href: "/reports", key: "nav.reports", icon: "📅" },
-  { href: "/osint", key: "nav.osint", icon: "🔍" },
 ];
 
 export default function Sidebar() {

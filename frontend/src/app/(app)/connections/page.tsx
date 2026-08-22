@@ -60,6 +60,16 @@ export default function ConnectionsPage() {
     }
   }
 
+  async function handleDelete(id: string) {
+  console.log('Deleting id:', id); // 🔥 Проверьте, какой ID передаётся
+  if (!confirm("Удалить это подключение? Все связанные запросы станут нерабочими.")) return;
+  try {
+    await api.deleteDataSource(id);
+    await load();
+  } catch (e) {
+    setError(e instanceof Error ? e.message : String(e));
+  }
+}
   return (
     <div className="mx-auto max-w-3xl">
       <div className="mb-6 flex items-center justify-between">
@@ -138,6 +148,12 @@ export default function ConnectionsPage() {
                 <p className="font-medium">{s.name}</p>
                 <p className="text-xs text-slate-500">{s.kind}</p>
               </div>
+              <button
+                onClick={() => handleDelete(s.id)}
+                className="text-sm font-medium text-down hover:text-down/80 transition"
+              >
+                Удалить
+              </button>
             </div>
           ))}
         </div>

@@ -43,6 +43,7 @@ type dueReport struct {
 	DeliveryKind   string
 	DeliveryTarget string
 	LastRunAt      sql.NullTime
+	NextRunAt      sql.NullTime // новое поле
 }
 
 // RunDue finds every active scheduled report whose cron schedule says
@@ -51,60 +52,92 @@ type dueReport struct {
 // (invalid cron, query failure, delivery failure) is logged and skipped
 // rather than aborting the whole batch.
 func RunDue(ctx context.Context, db *sql.DB, cfg Config) error {
+	now := time.Now()
+
+	// Выбираем отчёты, у которых next_run_at <= now (или NULL, если ещё не запускались)
+	// Используем FOR UPDATE SKIP LOCKED для безопасной блокировки.
 	rows, err := db.QueryContext(ctx,
-		`SELECT id, saved_query_id, cron_expr, delivery_kind, delivery_target, last_run_at
-		 FROM scheduled_reports WHERE is_active = true`)
+		`SELECT id, saved_query_id, cron_expr, delivery_kind, delivery_target, last_run_at, next_run_at
+		 FROM scheduled_reports
+		 WHERE is_active = true
+		   AND (next_run_at IS NULL OR next_run_at <= $1)
+		 ORDER BY next_run_at NULLS FIRST
+		 LIMIT 10
+		 FOR UPDATE SKIP LOCKED`,
+		now)
 	if err != nil {
 		return fmt.Errorf("could not list scheduled reports: %w", err)
 	}
+	defer rows.Close()
 
 	var due []dueReport
 	for rows.Next() {
 		var r dueReport
-		if err := rows.Scan(&r.ID, &r.SavedQueryID, &r.CronExpr, &r.DeliveryKind, &r.DeliveryTarget, &r.LastRunAt); err != nil {
-			rows.Close()
+		if err := rows.Scan(&r.ID, &r.SavedQueryID, &r.CronExpr, &r.DeliveryKind, &r.DeliveryTarget, &r.LastRunAt, &r.NextRunAt); err != nil {
 			return fmt.Errorf("could not read scheduled report: %w", err)
 		}
 		due = append(due, r)
 	}
-	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
 
-	now := time.Now()
 	ran, skipped := 0, 0
 
 	for _, r := range due {
+		// Парсим cron-выражение
 		schedule, err := cronParser.Parse(r.CronExpr)
 		if err != nil {
 			log.Printf("scheduler: report %s has invalid cron_expr %q: %v", r.ID, r.CronExpr, err)
 			continue
 		}
 
-		reference := now.Add(-24 * time.Hour) // never run before → due immediately
+		// Вычисляем следующее время запуска на основе last_run_at
+		var nextRun time.Time
 		if r.LastRunAt.Valid {
-			reference = r.LastRunAt.Time
+			nextRun = schedule.Next(r.LastRunAt.Time)
+		} else {
+			// Если никогда не запускался, то запускаем сразу (или с учётом времени создания)
+			nextRun = now
 		}
-		if schedule.Next(reference).After(now) {
+		// Обновляем next_run_at в базе атомарно (только если оно не изменилось)
+		res, err := db.ExecContext(ctx,
+			`UPDATE scheduled_reports
+			 SET next_run_at = $1
+			 WHERE id = $2 AND (next_run_at IS NULL OR next_run_at = $3)`,
+			nextRun, r.ID, r.NextRunAt.Time)
+		if err != nil {
+			log.Printf("scheduler: could not update next_run_at for report %s: %v", r.ID, err)
+			continue
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			// Кто-то другой уже обработал этот отчёт
 			skipped++
-			continue // not due yet
+			continue
 		}
 
+		// Выполняем отчёт
 		if err := runOne(ctx, db, cfg, r); err != nil {
 			log.Printf("scheduler: report %s failed: %v", r.ID, err)
+			// Не помечаем как запущенный, чтобы повторить позже (можно добавить счётчик попыток)
 			continue
 		}
 		ran++
 
+		// Обновляем last_run_at и next_run_at после успешного выполнения
+		// next_run_at вычисляем заново, чтобы избежать дрейфа времени
+		nextRunAfter := schedule.Next(time.Now())
 		if _, err := db.ExecContext(ctx,
-			`UPDATE scheduled_reports SET last_run_at = $1 WHERE id = $2`, now, r.ID,
+			`UPDATE scheduled_reports
+			 SET last_run_at = $1, next_run_at = $2
+			 WHERE id = $3`,
+			time.Now(), nextRunAfter, r.ID,
 		); err != nil {
-			log.Printf("scheduler: report %s ran but could not stamp last_run_at: %v", r.ID, err)
+			log.Printf("scheduler: report %s ran but could not update timestamps: %v", r.ID, err)
 		}
 	}
 
-	log.Printf("scheduler: %d report(s) ran, %d not yet due, %d total active", ran, skipped, len(due))
+	log.Printf("scheduler: %d report(s) ran, %d skipped/claimed, total %d due", ran, skipped, len(due))
 	return nil
 }
 

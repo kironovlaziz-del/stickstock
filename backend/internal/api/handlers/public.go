@@ -1,9 +1,15 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"log"
 	"net/http"
+	"sync"
+	"time"
+
+	"stickstock/backend/internal/cache"
 )
 
 // PublicHandler serves dashboards via their share_token, with no auth —
@@ -20,17 +26,71 @@ type publicDashboardResponse struct {
 	Widgets []widgetResponse `json:"widgets"`
 }
 
+// rateLimiter — простой in-memory лимитер по IP и токену.
+type rateLimiter struct {
+	mu     sync.Mutex
+	store  map[string][]time.Time // key: ip+token
+	limit  int
+	window time.Duration
+}
+
+func newRateLimiter(limit int, window time.Duration) *rateLimiter {
+	return &rateLimiter{
+		store:  make(map[string][]time.Time),
+		limit:  limit,
+		window: window,
+	}
+}
+
+func (rl *rateLimiter) allow(key string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	now := time.Now()
+	// Очищаем старые записи
+	if timestamps, ok := rl.store[key]; ok {
+		cutoff := now.Add(-rl.window)
+		valid := make([]time.Time, 0, len(timestamps))
+		for _, t := range timestamps {
+			if t.After(cutoff) {
+				valid = append(valid, t)
+			}
+		}
+		if len(valid) >= rl.limit {
+			return false
+		}
+		rl.store[key] = append(valid, now)
+	} else {
+		rl.store[key] = []time.Time{now}
+	}
+	return true
+}
+
+// глобальный лимитер (можно сделать через Redis, но для простоты in-memory)
+var publicRateLimiter = newRateLimiter(10, 1*time.Minute) // 10 запросов в минуту
+
 // GetDashboard: GET /api/public/dashboards/{token}
 func (h *PublicHandler) GetDashboard(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
+	ip := r.RemoteAddr
+	key := ip + ":" + token
+	if !publicRateLimiter.allow(key) {
+		http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
+		return
+	}
 
+	// Проверяем, что токен действителен и не истёк
 	var resp publicDashboardResponse
 	var dashboardID string
 	var layoutBytes []byte
+	var expiresAt sql.NullTime
 	if err := h.DB.QueryRowContext(r.Context(),
-		`SELECT id, name, layout FROM dashboards WHERE share_token = $1`, token,
-	).Scan(&dashboardID, &resp.Name, &layoutBytes); err != nil {
+		`SELECT id, name, layout, share_expires_at FROM dashboards WHERE share_token = $1`, token,
+	).Scan(&dashboardID, &resp.Name, &layoutBytes, &expiresAt); err != nil {
 		writeJSONError(w, http.StatusNotFound, "shared dashboard not found")
+		return
+	}
+	if expiresAt.Valid && time.Now().After(expiresAt.Time) {
+		writeJSONError(w, http.StatusGone, "share link has expired")
 		return
 	}
 	resp.Layout = layoutBytes
@@ -68,17 +128,42 @@ func (h *PublicHandler) GetDashboard(w http.ResponseWriter, r *http.Request) {
 func (h *PublicHandler) RunWidget(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
 	widgetID := r.PathValue("widget_id")
-
-	var savedQueryID string
-	if err := h.DB.QueryRowContext(r.Context(),
-		`SELECT dw.saved_query_id FROM dashboard_widgets dw
-		 JOIN dashboards d ON d.id = dw.dashboard_id
-		 WHERE dw.id = $1 AND d.share_token = $2`, widgetID, token,
-	).Scan(&savedQueryID); err != nil {
-		writeJSONError(w, http.StatusNotFound, "widget not found")
+	ip := r.RemoteAddr
+	key := ip + ":" + token
+	if !publicRateLimiter.allow(key) {
+		http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
 		return
 	}
 
+	// Проверяем, что токен действителен, не истёк, и виджет принадлежит дашборду
+	var savedQueryID string
+	var expiresAt sql.NullTime
+	if err := h.DB.QueryRowContext(r.Context(),
+		`SELECT dw.saved_query_id, d.share_expires_at
+		 FROM dashboard_widgets dw
+		 JOIN dashboards d ON d.id = dw.dashboard_id
+		 WHERE dw.id = $1 AND d.share_token = $2`, widgetID, token,
+	).Scan(&savedQueryID, &expiresAt); err != nil {
+		writeJSONError(w, http.StatusNotFound, "widget not found")
+		return
+	}
+	if expiresAt.Valid && time.Now().After(expiresAt.Time) {
+		writeJSONError(w, http.StatusGone, "share link has expired")
+		return
+	}
+
+	// Попробуем получить результат из кэша
+	cacheStore := cache.New(h.DB)
+	var cachedResult runResponse
+	cacheKey := "public_widget:" + widgetID + ":" + token
+	found, err := cacheStore.Get(r.Context(), cacheKey, &cachedResult)
+	if err == nil && found {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(cachedResult)
+		return
+	}
+
+	// Если не найдено — выполняем запрос
 	var sqlText, dataSourceID string
 	if err := h.DB.QueryRowContext(r.Context(),
 		`SELECT sql_text, data_source_id FROM saved_queries WHERE id = $1`, savedQueryID,
@@ -95,11 +180,23 @@ func (h *PublicHandler) RunWidget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := execute(r.Context(), kind, dsn, sqlText, nil)
+	// Добавляем таймаут для публичных запросов (30 секунд)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	result, err := execute(ctx, kind, dsn, sqlText, nil)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	// Сохраняем в кэш на 5 минут (если результат не пустой)
+	if len(result.Rows) > 0 {
+		_ = cacheStore.Set(r.Context(), cacheKey, result, 5*time.Minute)
+	}
+
+	// Логируем запрос для аудита (можно добавить в отдельную таблицу)
+	log.Printf("[AUDIT] public widget run: token=%s, widget=%s, ip=%s, rows=%d", token, widgetID, ip, len(result.Rows))
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)

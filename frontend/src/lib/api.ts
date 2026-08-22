@@ -100,6 +100,7 @@ export const api = {
   listDataSources: () => request<DataSource[]>("/datasources"),
   createDataSource: (body: { name: string; kind: string; dsn: string }) =>
     request<DataSource>("/datasources", { method: "POST", body: JSON.stringify(body) }),
+    deleteDataSource: (id: string) => request<void>(`/datasources/${id}`, { method: "DELETE" }),
   getSchema: (dataSourceId: string) =>
     request<{ tables: TableInfo[] }>(`/datasources/${dataSourceId}/schema`),
 

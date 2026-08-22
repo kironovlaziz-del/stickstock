@@ -12,7 +12,8 @@ import (
 )
 
 type ExportHandler struct {
-	DB *sql.DB
+	DB             *sql.DB
+	EncryptionKey  string
 }
 
 var exportContentTypes = map[string]string{
@@ -71,7 +72,8 @@ func (h *ExportHandler) ExportSaved(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	kind, dsn, _, err := dataSourceForOwner(r.Context(), h.DB, dataSourceID, userID)
+	// Добавляем h.EncryptionKey как пятый аргумент
+	kind, dsn, _, err := dataSourceForOwner(r.Context(), h.DB, dataSourceID, userID, h.EncryptionKey)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "data source not found")
 		return
@@ -105,7 +107,7 @@ func (h *ExportHandler) ExportAdHoc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	kind, dsn, fileTable, err := dataSourceForOwner(r.Context(), h.DB, req.DataSourceID, userID)
+	kind, dsn, fileTable, err := dataSourceForOwner(r.Context(), h.DB, req.DataSourceID, userID, h.EncryptionKey)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "data source not found")
 		return

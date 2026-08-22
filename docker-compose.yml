@@ -27,6 +27,8 @@ services:
     restart: unless-stopped
     env_file: .env
     networks: [internal]
+    environment:
+      UPLOAD_DIR: /data/uploads
     # No external API keys needed — Polars/DuckDB/statsmodels/PyOD all run
     # locally in this container.
 

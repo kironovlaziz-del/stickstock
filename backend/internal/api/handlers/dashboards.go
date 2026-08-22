@@ -534,14 +534,6 @@ func (h *DashboardHandler) RemoveCollaborator(w http.ResponseWriter, r *http.Req
 
 // --- Sharing (public read-only link) ---
 
-func randomShareToken() (string, error) {
-	b := make([]byte, 24) // longer than the upload-table suffix — this token acts as a bearer credential, not just an opaque name
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
-}
-
 func (h *DashboardHandler) CreateShareLink(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
 	dashboardID := r.PathValue("id")
@@ -558,8 +550,12 @@ func (h *DashboardHandler) CreateShareLink(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Устанавливаем срок действия 30 дней
+	expiresAt := time.Now().Add(30 * 24 * time.Hour)
+
 	if _, err := h.DB.ExecContext(r.Context(),
-		`UPDATE dashboards SET share_token = $1 WHERE id = $2`, token, dashboardID,
+		`UPDATE dashboards SET share_token = $1, share_expires_at = $2 WHERE id = $3`,
+		token, expiresAt, dashboardID,
 	); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "could not enable sharing")
 		return
@@ -567,6 +563,15 @@ func (h *DashboardHandler) CreateShareLink(w http.ResponseWriter, r *http.Reques
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"share_token": token})
+}
+
+// randomShareToken генерирует 24-байтный случайный токен для публичных ссылок.
+func randomShareToken() (string, error) {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func (h *DashboardHandler) RevokeShareLink(w http.ResponseWriter, r *http.Request) {
@@ -580,7 +585,7 @@ func (h *DashboardHandler) RevokeShareLink(w http.ResponseWriter, r *http.Reques
 	}
 
 	if _, err := h.DB.ExecContext(r.Context(),
-		`UPDATE dashboards SET share_token = NULL WHERE id = $1`, dashboardID,
+		`UPDATE dashboards SET share_token = NULL, share_expires_at = NULL WHERE id = $1`, dashboardID,
 	); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "could not revoke sharing")
 		return

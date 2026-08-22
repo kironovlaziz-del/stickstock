@@ -16,5 +16,5 @@ EXPOSE 8080
 # api runs as the container's persistent process; worker is a one-shot
 # batch job for host cron to invoke on a schedule:
 #   docker compose run --rm backend /app/worker
-ENTRYPOINT ["/app/api"]
+CMD ["/app/api"]
 

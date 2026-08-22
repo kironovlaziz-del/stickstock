@@ -11,11 +11,13 @@ import (
 
 	"stickstock/backend/internal/api/middleware"
 	"stickstock/backend/internal/connectors"
+	"stickstock/backend/internal/crypto"
 	"stickstock/backend/internal/queryengine"
 )
 
 type QueryHandler struct {
-	DB *sql.DB
+	DB             *sql.DB
+	EncryptionKey  string // ключ для AES-256-GCM
 }
 
 const maxResultRows = 1000
@@ -30,13 +32,27 @@ type runResponse struct {
 // against it. fileTable is only set for kind == "file" (see
 // migrations/0002_uploads.sql) and is empty otherwise. A free function
 // (not a *QueryHandler method) so ExportHandler can share it.
-func dataSourceForOwner(ctx context.Context, db *sql.DB, id, ownerID string) (kind, dsn, fileTable string, err error) {
-	var fileTableNull sql.NullString
-	err = db.QueryRowContext(ctx,
-		`SELECT kind, dsn, file_table FROM data_sources WHERE id = $1 AND owner_id = $2`, id, ownerID,
-	).Scan(&kind, &dsn, &fileTableNull)
-	fileTable = fileTableNull.String
-	return
+
+func dataSourceForOwner(ctx context.Context, db *sql.DB, id, ownerID, encryptionKey string) (kind, dsn, fileTable string, err error) {
+    var fileTableNull sql.NullString
+    err = db.QueryRowContext(ctx,
+        `SELECT kind, dsn, file_table FROM data_sources WHERE id = $1 AND owner_id = $2`, id, ownerID,
+    ).Scan(&kind, &dsn, &fileTableNull)
+    if err != nil {
+        return "", "", "", err
+    }
+    fileTable = fileTableNull.String
+
+    if kind != string(connectors.KindFile) && dsn != "" {
+        decrypted, err := crypto.Decrypt(encryptionKey, dsn)
+        if err != nil {
+            // Если не удалось расшифровать, используем DSN как открытый текст (легаси-данные)
+            log.Printf("WARNING: Decrypt error for id %s: %v — using plaintext DSN", id, err)
+        } else {
+            dsn = decrypted
+        }
+    }
+    return
 }
 
 // validateQueryText applies the right safety check for the data source's
@@ -116,7 +132,7 @@ func (h *QueryHandler) RunAdHoc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	kind, dsn, fileTable, err := dataSourceForOwner(r.Context(), h.DB, req.DataSourceID, userID)
+	kind, dsn, fileTable, err := dataSourceForOwner(r.Context(), h.DB, req.DataSourceID, userID, h.EncryptionKey)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "data source not found")
 		return
@@ -163,7 +179,7 @@ func (h *QueryHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	kind, _, fileTable, err := dataSourceForOwner(r.Context(), h.DB, req.DataSourceID, userID)
+	kind, _, fileTable, err := dataSourceForOwner(r.Context(), h.DB, req.DataSourceID, userID, h.EncryptionKey)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "data source not found")
 		return
@@ -299,7 +315,7 @@ func (h *QueryHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "query not found")
 		return
 	}
-	kind, _, fileTable, err := dataSourceForOwner(r.Context(), h.DB, dataSourceID, userID)
+	kind, _, fileTable, err := dataSourceForOwner(r.Context(), h.DB, dataSourceID, userID, h.EncryptionKey)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "data source not found")
 		return
@@ -469,7 +485,7 @@ func (h *QueryHandler) RunSaved(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	kind, dsn, _, err := dataSourceForOwner(r.Context(), h.DB, dataSourceID, queryOwnerID)
+	kind, dsn, _, err := dataSourceForOwner(r.Context(), h.DB, dataSourceID, queryOwnerID, h.EncryptionKey)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "data source not found")
 		return

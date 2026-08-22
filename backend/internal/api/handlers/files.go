@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -21,7 +22,12 @@ type FileHandler struct {
 	DatabaseURL string // reused as the DSN so uploaded tables are queryable through the normal Postgres connector
 }
 
-const maxUploadBytes = 25 << 20 // 25MB, matches nginx client_max_body_size
+const (
+	maxUploadBytes  = 25 << 20 // 25MB, matches nginx client_max_body_size
+	maxColumns      = 100      // защита от слишком широких CSV
+	sampleSize      = 100      // строк для определения типов
+	insertBatchSize = 500      // строк за один INSERT
+)
 
 var identifierSanitizer = regexp.MustCompile(`[^a-z0-9_]+`)
 
@@ -40,6 +46,10 @@ func sanitizeIdentifier(name string, fallback string) string {
 	if s[0] >= '0' && s[0] <= '9' {
 		s = "c_" + s
 	}
+	// Ограничиваем длину идентификатора (Postgres max 63 символа)
+	if len(s) > 63 {
+		s = s[:63]
+	}
 	return s
 }
 
@@ -51,13 +61,9 @@ func randomSuffix() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// inferColumnType guesses a Postgres column type from a sample of string
-// values from a CSV column: bigint if every non-empty value parses as an
-// integer, double precision if every value parses as a float, else text.
-// Known limitation: this loses leading zeros (e.g. a "007" code becomes
-// the integer 7) — fine for genuinely numeric columns, not for ID-like
-// codes. No attempt is made to distinguish the two automatically.
-func inferColumnType(samples []string) string {
+// inferColumnTypeFromSample определяет тип колонки по выборке значений.
+// Возвращает "bigint", "double precision" или "text".
+func inferColumnTypeFromSample(samples []string) string {
 	allInt, allFloat, seenAny := true, true, false
 
 	for _, v := range samples {
@@ -83,6 +89,29 @@ func inferColumnType(samples []string) string {
 		return "double precision"
 	default:
 		return "text"
+	}
+}
+
+// convertValue преобразует строку в соответствующий Go-тип для вставки.
+// Используется для числовых колонок, чтобы вставлять NULL для пустых строк.
+func convertValue(val string, colType string) interface{} {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return nil
+	}
+	switch colType {
+	case "bigint":
+		if i, err := strconv.ParseInt(val, 10, 64); err == nil {
+			return i
+		}
+		return nil
+	case "double precision":
+		if f, err := strconv.ParseFloat(val, 64); err == nil {
+			return f
+		}
+		return nil
+	default:
+		return val
 	}
 }
 
@@ -117,20 +146,25 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reader := csv.NewReader(file)
-	reader.FieldsPerRecord = -1 // tolerate ragged rows; short rows get NULLs, extra fields are ignored
-	records, err := reader.ReadAll()
+	reader.FieldsPerRecord = -1 // tolerate ragged rows
+	reader.ReuseRecord = true   // экономия памяти
+
+	// Читаем заголовок
+	rawHeader, err := reader.Read()
 	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "could not parse CSV: "+err.Error())
+		writeJSONError(w, http.StatusBadRequest, "could not read CSV header: "+err.Error())
 		return
 	}
-	if len(records) < 2 {
-		writeJSONError(w, http.StatusBadRequest, "file needs a header row plus at least one data row")
+	if len(rawHeader) == 0 {
+		writeJSONError(w, http.StatusBadRequest, "CSV header is empty")
+		return
+	}
+	if len(rawHeader) > maxColumns {
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("CSV has %d columns, maximum allowed is %d", len(rawHeader), maxColumns))
 		return
 	}
 
-	rawHeader := records[0]
-	dataRows := records[1:]
-
+	// Санитизируем названия колонок
 	colNames := make([]string, len(rawHeader))
 	seen := map[string]int{}
 	for i, rawName := range rawHeader {
@@ -146,15 +180,43 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		colNames[i] = final
 	}
 
+	// Собираем выборку для определения типов
+	samples := make([][]string, 0, sampleSize)
+	rowCount := 0
+	for {
+		row, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "could not read CSV row: "+err.Error())
+			return
+		}
+		if len(row) > len(colNames) {
+			row = row[:len(colNames)] // обрезаем лишние колонки
+		}
+		samples = append(samples, row)
+		rowCount++
+		if len(samples) >= sampleSize {
+			break
+		}
+	}
+
+	if rowCount == 0 {
+		writeJSONError(w, http.StatusBadRequest, "file needs a header row plus at least one data row")
+		return
+	}
+
+	// Определяем типы колонок по выборке
 	colTypes := make([]string, len(colNames))
 	for i := range colNames {
-		samples := make([]string, 0, len(dataRows))
-		for _, row := range dataRows {
+		vals := make([]string, 0, len(samples))
+		for _, row := range samples {
 			if i < len(row) {
-				samples = append(samples, row[i])
+				vals = append(vals, row[i])
 			}
 		}
-		colTypes[i] = inferColumnType(samples)
+		colTypes[i] = inferColumnTypeFromSample(vals)
 	}
 
 	suffix, err := randomSuffix()
@@ -175,9 +237,63 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "could not create table: "+err.Error())
 		return
 	}
-	if err := insertUploadRows(r.Context(), tx, tableName, colNames, dataRows); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "could not insert rows: "+err.Error())
+
+	// Вставляем данные пакетами (используем тот же reader, но он уже прочитал выборку)
+	// Нужно заново открыть файл для потокового чтения всех данных.
+	// Переоткрываем файл из multipart (можно использовать file.Seek(0,0), но multipart.File не всегда поддерживает seek)
+	// Поэтому читаем заново из form file.
+	file2, _, err := r.FormFile("file")
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not re-open file")
 		return
+	}
+	defer file2.Close()
+
+	reader2 := csv.NewReader(file2)
+	reader2.ReuseRecord = true
+	// Пропускаем заголовок
+	if _, err := reader2.Read(); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not re-read header")
+		return
+	}
+
+	totalRows := 0
+	batch := make([][]string, 0, insertBatchSize)
+
+	for {
+		row, err := reader2.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "could not read CSV row: "+err.Error())
+			return
+		}
+		// Обрезаем лишние колонки
+		if len(row) > len(colNames) {
+			row = row[:len(colNames)]
+		}
+		// Дополняем недостающие колонки пустыми строками
+		if len(row) < len(colNames) {
+			missing := make([]string, len(colNames)-len(row))
+			row = append(row, missing...)
+		}
+		batch = append(batch, row)
+		totalRows++
+		if len(batch) >= insertBatchSize {
+			if err := insertUploadRowsTyped(r.Context(), tx, tableName, colNames, colTypes, batch); err != nil {
+				writeJSONError(w, http.StatusInternalServerError, "could not insert rows: "+err.Error())
+				return
+			}
+			batch = batch[:0] // очищаем слайс
+		}
+	}
+	// Вставляем оставшиеся строки
+	if len(batch) > 0 {
+		if err := insertUploadRowsTyped(r.Context(), tx, tableName, colNames, colTypes, batch); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "could not insert rows: "+err.Error())
+			return
+		}
 	}
 
 	qualifiedTable := "uploads." + tableName
@@ -202,15 +318,12 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		DataSourceID: dataSourceID,
 		Table:        qualifiedTable,
 		Columns:      colNames,
-		RowCount:     len(dataRows),
+		RowCount:     totalRows,
 	})
 }
 
-// createUploadTable and insertUploadRows use %q to quote identifiers,
-// which is safe here specifically because tableName and cols are always
-// either machine-generated (tableName: "t_" + hex) or passed through
-// sanitizeIdentifier, so neither can contain a character %q would need to
-// escape.
+// createUploadTable и insertUploadRowsTyped используют %q для кавычек,
+// что безопасно, так как tableName и colNames проходят через sanitizeIdentifier.
 func createUploadTable(ctx context.Context, tx *sql.Tx, table string, cols, types []string) error {
 	defs := make([]string, len(cols))
 	for i, c := range cols {
@@ -221,43 +334,55 @@ func createUploadTable(ctx context.Context, tx *sql.Tx, table string, cols, type
 	return err
 }
 
-const insertBatchSize = 500
+// insertUploadRowsTyped вставляет строки с преобразованием типов.
+func insertUploadRowsTyped(ctx context.Context, tx *sql.Tx, table string, cols, types []string, rows [][]string) error {
+	if len(rows) == 0 {
+		return nil
+	}
 
-func insertUploadRows(ctx context.Context, tx *sql.Tx, table string, cols []string, rows [][]string) error {
 	quotedCols := make([]string, len(cols))
 	for i, c := range cols {
 		quotedCols[i] = fmt.Sprintf("%q", c)
 	}
 	colList := strings.Join(quotedCols, ", ")
 
-	for start := 0; start < len(rows); start += insertBatchSize {
-		end := start + insertBatchSize
-		if end > len(rows) {
-			end = len(rows)
-		}
-		batch := rows[start:end]
-
-		placeholders := make([]string, len(batch))
-		args := make([]interface{}, 0, len(batch)*len(cols))
-		argN := 1
-		for i, row := range batch {
-			ph := make([]string, len(cols))
-			for j := range cols {
-				ph[j] = fmt.Sprintf("$%d", argN)
-				argN++
-				if j < len(row) {
-					args = append(args, row[j])
-				} else {
-					args = append(args, nil)
-				}
+	placeholders := make([]string, len(rows))
+	args := make([]interface{}, 0, len(rows)*len(cols))
+	argN := 1
+	for i, row := range rows {
+		ph := make([]string, len(cols))
+		for j := range cols {
+			ph[j] = fmt.Sprintf("$%d", argN)
+			argN++
+			// Преобразуем значение в соответствии с типом колонки
+			var val interface{}
+			if j < len(row) {
+				val = convertValue(row[j], types[j])
+			} else {
+				val = nil
 			}
-			placeholders[i] = "(" + strings.Join(ph, ", ") + ")"
+			args = append(args, val)
 		}
-
-		stmt := fmt.Sprintf("INSERT INTO uploads.%q (%s) VALUES %s", table, colList, strings.Join(placeholders, ", "))
-		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
-			return err
-		}
+		placeholders[i] = "(" + strings.Join(ph, ", ") + ")"
 	}
-	return nil
+
+	stmt := fmt.Sprintf("INSERT INTO uploads.%q (%s) VALUES %s", table, colList, strings.Join(placeholders, ", "))
+	_, err := tx.ExecContext(ctx, stmt, args...)
+	return err
+}
+
+// DeleteUploadTable удаляет upload-таблицу при удалении источника данных.
+// Эта функция вызывается из обработчика удаления data_sources.
+func DeleteUploadTable(ctx context.Context, tx *sql.Tx, tableName string) error {
+	if tableName == "" {
+		return nil
+	}
+	// tableName имеет формат "uploads.t_xxxx"
+	parts := strings.SplitN(tableName, ".", 2)
+	if len(parts) != 2 || parts[0] != "uploads" {
+		return fmt.Errorf("invalid table name: %s", tableName)
+	}
+	stmt := fmt.Sprintf("DROP TABLE IF EXISTS uploads.%q CASCADE", parts[1])
+	_, err := tx.ExecContext(ctx, stmt)
+	return err
 }

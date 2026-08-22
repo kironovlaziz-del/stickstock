@@ -69,10 +69,18 @@ func RequireAuth(secret, supabaseURL string, db *sql.DB) func(http.Handler) http
 			// Checked on every request rather than once at login, since a
 			// user blocked mid-session should lose access immediately, not
 			// just stop being able to log in again.
+			// FAIL‑CLOSED: любая ошибка (включая отсутствие профиля)
+			// приводит к отказу в доступе.
 			var isBlocked bool
-			if err := db.QueryRowContext(r.Context(),
+			err = db.QueryRowContext(r.Context(),
 				`SELECT is_blocked FROM profiles WHERE id = $1`, sub,
-			).Scan(&isBlocked); err == nil && isBlocked {
+			).Scan(&isBlocked)
+			if err != nil {
+				// Если профиль не найден или произошла ошибка — доступ запрещён
+				http.Error(w, `{"error":"account not found or inaccessible"}`, http.StatusForbidden)
+				return
+			}
+			if isBlocked {
 				http.Error(w, `{"error":"account blocked"}`, http.StatusForbidden)
 				return
 			}

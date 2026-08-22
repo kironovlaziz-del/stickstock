@@ -7,10 +7,12 @@ import (
 
 	"stickstock/backend/internal/api/middleware"
 	"stickstock/backend/internal/connectors"
+	"stickstock/backend/internal/crypto"
 )
 
 type DataSourceHandler struct {
-	DB *sql.DB
+	DB             *sql.DB
+	EncryptionKey  string // ключ для AES-256-GCM
 }
 
 type createDataSourceRequest struct {
@@ -52,9 +54,7 @@ func (h *DataSourceHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 // Create saves a new connection after test-pinging it via whichever
-// connector matches Kind. TODO before production: encrypt DSN at rest
-// (e.g. AES-GCM with a key from a secrets manager) instead of storing it
-// as plaintext.
+// connector matches Kind. DSN is encrypted at rest using AES-256-GCM.
 func (h *DataSourceHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
 
@@ -68,6 +68,20 @@ func (h *DataSourceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Проверяем наличие ключа шифрования
+	if h.EncryptionKey == "" {
+		writeJSONError(w, http.StatusInternalServerError, "encryption key not configured")
+		return
+	}
+
+	// Шифруем DSN перед сохранением
+	encryptedDSN, err := crypto.Encrypt(h.EncryptionKey, req.DSN)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to encrypt credentials")
+		return
+	}
+
+	// Тестируем подключение с расшифрованным DSN
 	conn, err := connectors.New(req.Kind, req.DSN)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -82,7 +96,7 @@ func (h *DataSourceHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var id string
 	err = h.DB.QueryRowContext(r.Context(),
 		`INSERT INTO data_sources (owner_id, name, kind, dsn) VALUES ($1, $2, $3, $4) RETURNING id`,
-		userID, req.Name, req.Kind, req.DSN,
+		userID, req.Name, req.Kind, encryptedDSN,
 	).Scan(&id)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "could not save data source")
@@ -92,4 +106,57 @@ func (h *DataSourceHandler) Create(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(dataSourceResponse{ID: id, Name: req.Name, Kind: req.Kind})
+}
+
+// Delete removes a data source and, if it is a file upload, drops the
+// underlying uploads-schema table to prevent accumulation of orphaned
+// tables. DELETE /api/datasources/{id}
+func (h *DataSourceHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.UserIDFromContext(r.Context())
+	id := r.PathValue("id")
+
+	// Получаем информацию о источнике (kind и file_table)
+	var kind, fileTable string
+	err := h.DB.QueryRowContext(r.Context(),
+		`SELECT kind, file_table FROM data_sources WHERE id = $1 AND owner_id = $2`,
+		id, userID,
+	).Scan(&kind, &fileTable)
+	if err != nil {
+		writeJSONError(w, http.StatusNotFound, "data source not found")
+		return
+	}
+
+	// Начинаем транзакцию
+	tx, err := h.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not start transaction")
+		return
+	}
+	defer tx.Rollback()
+
+	// Если это файловый источник, удаляем физическую таблицу
+	if kind == "file" && fileTable != "" {
+		if err := DeleteUploadTable(r.Context(), tx, fileTable); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "could not drop upload table: "+err.Error())
+			return
+		}
+	}
+
+	// Удаляем запись из data_sources
+	res, err := tx.ExecContext(r.Context(),
+		`DELETE FROM data_sources WHERE id = $1 AND owner_id = $2`, id, userID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not delete data source")
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeJSONError(w, http.StatusNotFound, "data source not found")
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not commit transaction")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

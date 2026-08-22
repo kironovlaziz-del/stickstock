@@ -6,6 +6,7 @@ not an in-memory buffer; the file is deleted before the response returns.
 """
 
 import os
+import re
 import tempfile
 
 import duckdb
@@ -19,13 +20,13 @@ _FORBIDDEN_KEYWORDS = (
     "insert", "update", "delete", "drop", "alter", "create",
     "copy", "attach", "install", "load", "export", "pragma",
 )
-
+_DEFAULT_LIMIT = 1000
 
 class FileQueryRequest(BaseModel):
     csv_content: str
     sql: str  # query the data via the table alias "data", e.g. "SELECT region, sum(revenue) FROM data GROUP BY region"
     delimiter: str = ","
-    limit: int = 1000
+    limit: int = _DEFAULT_LIMIT
 
 
 class FileQueryResponse(BaseModel):
@@ -48,6 +49,17 @@ def _validate_read_only(sql_text: str) -> None:
             raise HTTPException(400, f"query contains a disallowed keyword: {kw}")
 
 
+def _ensure_limit(sql: str, limit: int) -> str:
+
+    
+    sql = sql.strip().rstrip(";").strip()
+    
+    if re.search(r"\bLIMIT\s+\d+", sql, re.IGNORECASE):
+        return sql
+    
+    return f"{sql} LIMIT {limit}"
+
+
 @router.post("/api/analytics/query", response_model=FileQueryResponse)
 async def query_csv(req: FileQueryRequest) -> FileQueryResponse:
     _validate_read_only(req.sql)
@@ -58,6 +70,9 @@ async def query_csv(req: FileQueryRequest) -> FileQueryResponse:
     if len(req.csv_content.encode("utf-8")) > 50 * 1024 * 1024:
         raise HTTPException(400, "csv_content exceeds the 50MB limit for ad-hoc queries")
 
+    
+    sql_with_limit = _ensure_limit(req.sql, req.limit + 1)  # +1 для проверки на усечение
+
     tmp_path = None
     con = None
     try:
@@ -66,14 +81,12 @@ async def query_csv(req: FileQueryRequest) -> FileQueryResponse:
             tmp_path = tmp.name
 
         con = duckdb.connect(database=":memory:")
-        # tmp_path comes from tempfile (safe, no quotes/semicolons) and
-        # delimiter is whitelisted above, so plain string interpolation
-        # here isn't attacker-controlled the way req.sql is.
         con.execute(
             f"CREATE VIEW data AS SELECT * FROM read_csv_auto('{tmp_path}', delim='{req.delimiter}')"
         )
-        cursor = con.execute(req.sql)
-        result = cursor.fetchall()
+        cursor = con.execute(sql_with_limit)
+        
+        rows = cursor.fetchall()
         columns = [c[0] for c in cursor.description] if cursor.description else []
     except HTTPException:
         raise
@@ -85,6 +98,9 @@ async def query_csv(req: FileQueryRequest) -> FileQueryResponse:
         if tmp_path is not None and os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
-    truncated = len(result) > req.limit
-    rows = [list(r) for r in result[: req.limit]]
+    
+    truncated = len(rows) > req.limit
+    if truncated:
+        rows = rows[:req.limit]
+
     return FileQueryResponse(columns=columns, rows=rows, truncated=truncated)

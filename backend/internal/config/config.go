@@ -18,6 +18,7 @@ type Config struct {
 	LocalesDir          string
 	DefaultLocale       string
 	AllowedOrigins      string
+	EncryptionKey       string
 
 	// Delivery channels for cmd/worker's scheduled reports. Both optional —
 	// a deployment only using one of email/telegram doesn't need the other
@@ -29,7 +30,6 @@ type Config struct {
 	SMTPPassword     string
 	SMTPFrom         string
 	TelegramBotToken string
-	HIBPAPIKey       string // haveibeenpwned.com breach-check API key, optional — OSINT "breach" lookups error clearly if unset
 }
 
 func Load() (*Config, error) {
@@ -49,7 +49,7 @@ func Load() (*Config, error) {
 		SMTPPassword:        os.Getenv("SMTP_PASSWORD"),
 		SMTPFrom:            os.Getenv("SMTP_FROM"),
 		TelegramBotToken:    os.Getenv("TELEGRAM_BOT_TOKEN"),
-		HIBPAPIKey:          os.Getenv("HIBP_API_KEY"),
+		EncryptionKey:       os.Getenv("ENCRYPTION_KEY"),
 	}
 
 	if cfg.DatabaseURL == "" {

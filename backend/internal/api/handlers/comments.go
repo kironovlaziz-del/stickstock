@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -21,8 +23,25 @@ type commentResponse struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// List: GET /api/dashboards/{id}/widgets/{widget_id}/comments — any role
-// (owner/editor/viewer) with access to the dashboard can read.
+// validateWidgetOwnership проверяет, что widget_id существует и принадлежит dashboard_id.
+func validateWidgetOwnership(ctx context.Context, db *sql.DB, dashboardID, widgetID string) error {
+	var exists bool
+	err := db.QueryRowContext(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM dashboard_widgets
+			WHERE id = $1 AND dashboard_id = $2
+		)`, widgetID, dashboardID,
+	).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("database error: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("widget not found or does not belong to this dashboard")
+	}
+	return nil
+}
+
+// List: GET /api/dashboards/{id}/widgets/{widget_id}/comments
 func (h *CommentHandler) List(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
 	dashboardID := r.PathValue("id")
@@ -30,6 +49,11 @@ func (h *CommentHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := dashboardRole(r.Context(), h.DB, dashboardID, userID); err != nil {
 		writeJSONError(w, http.StatusNotFound, "dashboard not found")
+		return
+	}
+
+	if err := validateWidgetOwnership(r.Context(), h.DB, dashboardID, widgetID); err != nil {
+		writeJSONError(w, http.StatusNotFound, "widget not found")
 		return
 	}
 
@@ -60,9 +84,7 @@ type createCommentRequest struct {
 	Body string `json:"body"`
 }
 
-// Create: POST /api/dashboards/{id}/widgets/{widget_id}/comments — any
-// role can comment, including viewers (discussion shouldn't require edit
-// access).
+// Create: POST /api/dashboards/{id}/widgets/{widget_id}/comments
 func (h *CommentHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
 	dashboardID := r.PathValue("id")
@@ -70,6 +92,11 @@ func (h *CommentHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := dashboardRole(r.Context(), h.DB, dashboardID, userID); err != nil {
 		writeJSONError(w, http.StatusNotFound, "dashboard not found")
+		return
+	}
+
+	if err := validateWidgetOwnership(r.Context(), h.DB, dashboardID, widgetID); err != nil {
+		writeJSONError(w, http.StatusNotFound, "widget not found")
 		return
 	}
 
@@ -95,10 +122,7 @@ func (h *CommentHandler) Create(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// Delete: DELETE /api/comments/{comment_id} — only the comment's own
-// author, for now. Letting the dashboard owner moderate others' comments
-// too is a reasonable follow-up (needs comment -> widget -> dashboard ->
-// owner lookup) but nobody's asked for moderation yet.
+// Delete: DELETE /api/comments/{comment_id}
 func (h *CommentHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
 	commentID := r.PathValue("comment_id")

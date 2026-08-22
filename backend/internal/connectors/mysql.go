@@ -98,8 +98,14 @@ func (c *MySQLConnector) Query(ctx context.Context, query string, args ...interf
 		return nil, err
 	}
 
+	const maxRows = 1000
 	res := &Result{Columns: cols}
+	rowCount := 0
 	for rows.Next() {
+		if rowCount >= maxRows {
+			// Достигнут лимит — прекращаем чтение
+			break
+		}
 		vals := make([]interface{}, len(cols))
 		ptrs := make([]interface{}, len(cols))
 		for i := range vals {
@@ -109,8 +115,12 @@ func (c *MySQLConnector) Query(ctx context.Context, query string, args ...interf
 			return nil, err
 		}
 		res.Rows = append(res.Rows, vals)
+		rowCount++
 	}
-	return res, rows.Err()
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+	return res, nil
 }
 
 func (c *MySQLConnector) Close() error {
