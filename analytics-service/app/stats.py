@@ -1,5 +1,5 @@
 """POST /api/analytics/stats/* — deeper statistical analysis via
-statsmodels and scipy: OLS regression, Welch's t-test, and ARIMA
+statsmodels and scipy: OLS regression, Welch's t-test, and ARIMA"""
 
 import numpy as np
 import statsmodels.api as sm
