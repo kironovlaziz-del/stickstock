@@ -136,3 +136,16 @@ export interface AdminStats {
   total_queries: number;
   total_data_sources: number;
 }
+
+export interface Profile {
+  id: string;
+  email: string;
+  first_name?: string;
+  last_name?: string;
+  title?: string;
+  avatar_url?: string;
+  locale?: string;
+  is_admin?: boolean;
+  is_blocked?: boolean;
+  created_at: string;
+}

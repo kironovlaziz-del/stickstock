@@ -167,6 +167,9 @@ export const api = {
     body: JSON.stringify(body),
   }),
 
+updateProfile: (body: { first_name?: string; last_name?: string; title?: string; avatar_url?: string; locale?: string }) =>
+  request<void>("/me", { method: "PUT", body: JSON.stringify(body) }),
+
   // --- Analytics (proxy to Python service) ---
 aggregate: (body: {
   columns: string[];
