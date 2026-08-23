@@ -1,6 +1,5 @@
 """POST /api/analytics/query — run a read-only SQL query directly against
 CSV content via DuckDB, with no need to load it into Postgres first
-("Аналитика без загрузки в БД"). The CSV is written to a short-lived temp
 file inside the container because DuckDB's CSV reader wants a file path,
 not an in-memory buffer; the file is deleted before the response returns.
 """
@@ -71,7 +70,6 @@ async def query_csv(req: FileQueryRequest) -> FileQueryResponse:
         raise HTTPException(400, "csv_content exceeds the 50MB limit for ad-hoc queries")
 
     
-    sql_with_limit = _ensure_limit(req.sql, req.limit + 1)  # +1 для проверки на усечение
 
     tmp_path = None
     con = None

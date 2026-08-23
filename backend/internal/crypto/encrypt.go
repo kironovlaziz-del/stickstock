@@ -12,8 +12,8 @@ import (
 	"io"
 )
 
-// Encrypt шифрует plaintext с использованием AES-256-GCM.
-// Возвращает base64-строку, содержащую nonce + ciphertext.
+// Encrypt - plaintext  AES-256-GCM.
+// base64-str nonce + ciphertext.
 func Encrypt(key, plaintext string) (string, error) {
 	if key == "" {
 		return "", fmt.Errorf("encryption key is empty")
@@ -34,7 +34,7 @@ func Encrypt(key, plaintext string) (string, error) {
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
-// Decrypt расшифровывает закодированную строку.
+// Decrypt
 func Decrypt(key, encoded string) (string, error) {
 	if key == "" {
 		return "", fmt.Errorf("encryption key is empty")

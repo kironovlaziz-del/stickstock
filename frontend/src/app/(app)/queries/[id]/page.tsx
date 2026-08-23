@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import AnalyticsPanel from "@/components/AnalyticsPanel";
 import { api, type ExportFormat } from "@/lib/api";
 import type { SavedQuery, QueryResult, QueryVersion } from "@/lib/types";
 import { useI18n } from "@/lib/i18n";
+
 
 export default function QueryDetailPage() {
   const { t } = useI18n();
@@ -133,6 +135,7 @@ export default function QueryDetailPage() {
         {result && (
           <div className="glass mt-4 overflow-auto rounded-2xl p-5">
             <table className="w-full text-left text-sm">
+            {result && <AnalyticsPanel result={result} queryId={params.id} />}
               <thead>
                 <tr className="border-b border-white/10 text-slate-400">
                   {result.columns.map((c) => (

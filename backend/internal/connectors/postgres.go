@@ -82,7 +82,7 @@ func (c *PostgresConnector) Query(ctx context.Context, query string, args ...int
 	rowCount := 0
 	for rows.Next() {
 		if rowCount >= maxRows {
-			// Достигнут лимит — прекращаем чтение
+
 			break
 		}
 		vals := make([]interface{}, len(cols))

@@ -191,13 +191,13 @@ export default function DashboardSharePage() {
 
         <div className="space-y-2">
           {collaborators.map((c) => (
-            <div key={c.user_id} className="flex items-center justify-between rounded-lg border border-white/10 px-3 py-2">
+            <div key={c.id} className="flex items-center justify-between rounded-lg border border-white/10 px-3 py-2">
               <div>
                 <p className="text-sm">{c.email}</p>
                 <p className="text-xs text-slate-500">{c.role}</p>
               </div>
               <button
-                onClick={() => handleRemoveCollaborator(c.user_id)}
+                onClick={() => handleRemoveCollaborator(c.id)}
                 className="focus-ring rounded-md border border-down/30 px-2 py-1 text-xs text-down hover:bg-down/10"
               >
                 Remove

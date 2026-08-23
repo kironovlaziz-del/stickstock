@@ -12,7 +12,7 @@ import (
 
 type DataSourceHandler struct {
 	DB             *sql.DB
-	EncryptionKey  string // ключ для AES-256-GCM
+	EncryptionKey  string
 }
 
 type createDataSourceRequest struct {
@@ -68,20 +68,17 @@ func (h *DataSourceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Проверяем наличие ключа шифрования
 	if h.EncryptionKey == "" {
 		writeJSONError(w, http.StatusInternalServerError, "encryption key not configured")
 		return
 	}
 
-	// Шифруем DSN перед сохранением
 	encryptedDSN, err := crypto.Encrypt(h.EncryptionKey, req.DSN)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "failed to encrypt credentials")
 		return
 	}
 
-	// Тестируем подключение с расшифрованным DSN
 	conn, err := connectors.New(req.Kind, req.DSN)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -115,7 +112,6 @@ func (h *DataSourceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
 	id := r.PathValue("id")
 
-	// Получаем информацию о источнике (kind и file_table)
 	var kind, fileTable string
 	err := h.DB.QueryRowContext(r.Context(),
 		`SELECT kind, file_table FROM data_sources WHERE id = $1 AND owner_id = $2`,
@@ -126,7 +122,6 @@ func (h *DataSourceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Начинаем транзакцию
 	tx, err := h.DB.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "could not start transaction")
@@ -134,7 +129,6 @@ func (h *DataSourceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	// Если это файловый источник, удаляем физическую таблицу
 	if kind == "file" && fileTable != "" {
 		if err := DeleteUploadTable(r.Context(), tx, fileTable); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "could not drop upload table: "+err.Error())
@@ -142,7 +136,6 @@ func (h *DataSourceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Удаляем запись из data_sources
 	res, err := tx.ExecContext(r.Context(),
 		`DELETE FROM data_sources WHERE id = $1 AND owner_id = $2`, id, userID)
 	if err != nil {

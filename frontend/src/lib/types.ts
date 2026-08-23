@@ -1,7 +1,11 @@
+export type DashboardRole = "owner" | "editor" | "viewer";
+
 export interface Profile {
   id: string;
-  locale: string;
-  is_admin: boolean;
+  email: string;
+  locale?: string;
+  is_admin?: boolean;
+  is_blocked?: boolean;
   created_at: string;
 }
 
@@ -15,10 +19,11 @@ export interface SavedQuery {
   id: string;
   data_source_id: string;
   name: string;
-  sql_text?: string;
+  sql_text: string;
   version: number;
   last_run_at?: string;
   last_row_count?: number;
+  created_at: string;
 }
 
 export interface QueryVersion {
@@ -29,19 +34,15 @@ export interface QueryVersion {
 
 export interface QueryResult {
   columns: string[];
-  rows: unknown[][];
-  truncated: boolean;
+  rows: (string | number | boolean | null)[][];
+  truncated?: boolean;
 }
 
-export type ChartType =
-  | "line"
-  | "bar"
-  | "pie"
-  | "heatmap"
-  | "table"
-  | "boxplot"
-  | "scatter"
-  | "treemap";
+export interface DashboardSummary {
+  id: string;
+  name: string;
+  created_at: string;
+}
 
 export interface LayoutItem {
   i: string; // widget id
@@ -51,21 +52,27 @@ export interface LayoutItem {
   h: number;
 }
 
+export type ChartType =
+  | "line"
+  | "bar"
+  | "pie"
+  | "scatter"
+  | "table"
+  | "heatmap"
+  | "boxplot"
+  | "treemap"
+  | "kpi"
+  | "forecast";
+
 export interface Widget {
   id: string;
   dashboard_id: string;
   saved_query_id: string;
   chart_type: ChartType;
-  config: Record<string, unknown>;
-}
-
-export type DashboardRole = "owner" | "editor" | "viewer";
-
-export interface DashboardSummary {
-  id: string;
-  name: string;
-  role: DashboardRole;
-  created_at: string;
+  config?: {
+    x_field?: string;
+    y_field?: string;
+  };
 }
 
 export interface DashboardDetail {
@@ -78,20 +85,20 @@ export interface DashboardDetail {
   widgets: Widget[];
 }
 
-export interface ColumnInfo {
-  name: string;
-  data_type: string;
-  nullable: boolean;
-}
-
 export interface TableInfo {
   schema: string;
   name: string;
   columns: ColumnInfo[];
 }
 
+export interface ColumnInfo {
+  name: string;
+  data_type: string;
+  nullable: boolean;
+}
+
 export interface Collaborator {
-  user_id: string;
+  id: string;
   email: string;
   role: "editor" | "viewer";
 }
@@ -118,15 +125,14 @@ export interface ScheduledReport {
 export interface AdminUser {
   id: string;
   email: string;
-  locale: string;
   is_admin: boolean;
   is_blocked: boolean;
   created_at: string;
 }
 
 export interface AdminStats {
-  users: number;
-  data_sources: number;
-  saved_queries: number;
-  dashboards: number;
+  total_users: number;
+  total_dashboards: number;
+  total_queries: number;
+  total_data_sources: number;
 }

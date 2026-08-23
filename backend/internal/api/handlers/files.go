@@ -24,9 +24,9 @@ type FileHandler struct {
 
 const (
 	maxUploadBytes  = 25 << 20 // 25MB, matches nginx client_max_body_size
-	maxColumns      = 100      // защита от слишком широких CSV
-	sampleSize      = 100      // строк для определения типов
-	insertBatchSize = 500      // строк за один INSERT
+	maxColumns      = 100      //  CSV
+	sampleSize      = 100      // tipes
+	insertBatchSize = 500      // one INSERT
 )
 
 var identifierSanitizer = regexp.MustCompile(`[^a-z0-9_]+`)
@@ -46,7 +46,7 @@ func sanitizeIdentifier(name string, fallback string) string {
 	if s[0] >= '0' && s[0] <= '9' {
 		s = "c_" + s
 	}
-	// Ограничиваем длину идентификатора (Postgres max 63 символа)
+	//(Postgres max 63 )
 	if len(s) > 63 {
 		s = s[:63]
 	}
@@ -61,8 +61,8 @@ func randomSuffix() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// inferColumnTypeFromSample определяет тип колонки по выборке значений.
-// Возвращает "bigint", "double precision" или "text".
+// inferColumnTypeFromSample
+//  "bigint", "double precision" or "text".
 func inferColumnTypeFromSample(samples []string) string {
 	allInt, allFloat, seenAny := true, true, false
 
@@ -92,8 +92,8 @@ func inferColumnTypeFromSample(samples []string) string {
 	}
 }
 
-// convertValue преобразует строку в соответствующий Go-тип для вставки.
-// Используется для числовых колонок, чтобы вставлять NULL для пустых строк.
+// convertValue
+// NULL
 func convertValue(val string, colType string) interface{} {
 	val = strings.TrimSpace(val)
 	if val == "" {
@@ -147,9 +147,9 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	reader := csv.NewReader(file)
 	reader.FieldsPerRecord = -1 // tolerate ragged rows
-	reader.ReuseRecord = true   // экономия памяти
+	reader.ReuseRecord = true
 
-	// Читаем заголовок
+
 	rawHeader, err := reader.Read()
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "could not read CSV header: "+err.Error())
@@ -164,7 +164,7 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Санитизируем названия колонок
+
 	colNames := make([]string, len(rawHeader))
 	seen := map[string]int{}
 	for i, rawName := range rawHeader {
@@ -180,7 +180,7 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		colNames[i] = final
 	}
 
-	// Собираем выборку для определения типов
+
 	samples := make([][]string, 0, sampleSize)
 	rowCount := 0
 	for {
@@ -193,7 +193,7 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(row) > len(colNames) {
-			row = row[:len(colNames)] // обрезаем лишние колонки
+			row = row[:len(colNames)]
 		}
 		samples = append(samples, row)
 		rowCount++
@@ -207,7 +207,7 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Определяем типы колонок по выборке
+
 	colTypes := make([]string, len(colNames))
 	for i := range colNames {
 		vals := make([]string, 0, len(samples))
@@ -238,10 +238,6 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Вставляем данные пакетами (используем тот же reader, но он уже прочитал выборку)
-	// Нужно заново открыть файл для потокового чтения всех данных.
-	// Переоткрываем файл из multipart (можно использовать file.Seek(0,0), но multipart.File не всегда поддерживает seek)
-	// Поэтому читаем заново из form file.
 	file2, _, err := r.FormFile("file")
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "could not re-open file")
@@ -251,7 +247,7 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	reader2 := csv.NewReader(file2)
 	reader2.ReuseRecord = true
-	// Пропускаем заголовок
+
 	if _, err := reader2.Read(); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "could not re-read header")
 		return
@@ -269,11 +265,11 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusBadRequest, "could not read CSV row: "+err.Error())
 			return
 		}
-		// Обрезаем лишние колонки
+
 		if len(row) > len(colNames) {
 			row = row[:len(colNames)]
 		}
-		// Дополняем недостающие колонки пустыми строками
+
 		if len(row) < len(colNames) {
 			missing := make([]string, len(colNames)-len(row))
 			row = append(row, missing...)
@@ -285,10 +281,10 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 				writeJSONError(w, http.StatusInternalServerError, "could not insert rows: "+err.Error())
 				return
 			}
-			batch = batch[:0] // очищаем слайс
+			batch = batch[:0]
 		}
 	}
-	// Вставляем оставшиеся строки
+
 	if len(batch) > 0 {
 		if err := insertUploadRowsTyped(r.Context(), tx, tableName, colNames, colTypes, batch); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "could not insert rows: "+err.Error())
@@ -322,8 +318,8 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// createUploadTable и insertUploadRowsTyped используют %q для кавычек,
-// что безопасно, так как tableName и colNames проходят через sanitizeIdentifier.
+// createUploadTable  insertUploadRowsTyped  %q 
+//  tableName  colNames  sanitizeIdentifier.
 func createUploadTable(ctx context.Context, tx *sql.Tx, table string, cols, types []string) error {
 	defs := make([]string, len(cols))
 	for i, c := range cols {
@@ -334,7 +330,7 @@ func createUploadTable(ctx context.Context, tx *sql.Tx, table string, cols, type
 	return err
 }
 
-// insertUploadRowsTyped вставляет строки с преобразованием типов.
+// insertUploadRowsTyped
 func insertUploadRowsTyped(ctx context.Context, tx *sql.Tx, table string, cols, types []string, rows [][]string) error {
 	if len(rows) == 0 {
 		return nil
@@ -354,7 +350,7 @@ func insertUploadRowsTyped(ctx context.Context, tx *sql.Tx, table string, cols, 
 		for j := range cols {
 			ph[j] = fmt.Sprintf("$%d", argN)
 			argN++
-			// Преобразуем значение в соответствии с типом колонки
+
 			var val interface{}
 			if j < len(row) {
 				val = convertValue(row[j], types[j])
@@ -371,13 +367,13 @@ func insertUploadRowsTyped(ctx context.Context, tx *sql.Tx, table string, cols, 
 	return err
 }
 
-// DeleteUploadTable удаляет upload-таблицу при удалении источника данных.
-// Эта функция вызывается из обработчика удаления data_sources.
+// DeleteUploadTable delete upload
+// delete data_sources.
 func DeleteUploadTable(ctx context.Context, tx *sql.Tx, tableName string) error {
 	if tableName == "" {
 		return nil
 	}
-	// tableName имеет формат "uploads.t_xxxx"
+	// tableName  "uploads.t_xxxx"
 	parts := strings.SplitN(tableName, ".", 2)
 	if len(parts) != 2 || parts[0] != "uploads" {
 		return fmt.Errorf("invalid table name: %s", tableName)

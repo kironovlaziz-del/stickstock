@@ -126,7 +126,7 @@ func (c *MongoConnector) Query(ctx context.Context, query string, args ...interf
 	if q.Sort != nil {
 		findOpts.SetSort(q.Sort)
 	}
-	// Жёсткое ограничение на 1000 документов
+	// Hard limit 1000 doc.
 	limit := q.Limit
 	if limit <= 0 || limit > defaultMongoLimit {
 		limit = defaultMongoLimit

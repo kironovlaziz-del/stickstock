@@ -6,10 +6,6 @@ import { useI18n } from "@/lib/i18n";
 
 const LOCALES = [
   { code: "en", label: "EN" },
-  { code: "ru", label: "RU" },
-  { code: "uz", label: "UZ" },
-  { code: "kk", label: "KK" },
-  { code: "tg", label: "TG" },
 ];
 
 export default function TopBar({ userEmail }: { userEmail: string }) {

@@ -26,7 +26,7 @@ type publicDashboardResponse struct {
 	Widgets []widgetResponse `json:"widgets"`
 }
 
-// rateLimiter — простой in-memory лимитер по IP и токену.
+// rateLimiter —  in-memory limiter - IP or token
 type rateLimiter struct {
 	mu     sync.Mutex
 	store  map[string][]time.Time // key: ip+token
@@ -46,7 +46,7 @@ func (rl *rateLimiter) allow(key string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	now := time.Now()
-	// Очищаем старые записи
+	// clean
 	if timestamps, ok := rl.store[key]; ok {
 		cutoff := now.Add(-rl.window)
 		valid := make([]time.Time, 0, len(timestamps))
@@ -65,8 +65,8 @@ func (rl *rateLimiter) allow(key string) bool {
 	return true
 }
 
-// глобальный лимитер (можно сделать через Redis, но для простоты in-memory)
-var publicRateLimiter = newRateLimiter(10, 1*time.Minute) // 10 запросов в минуту
+// global limiter ( Redis,  in-memory)
+var publicRateLimiter = newRateLimiter(10, 1*time.Minute) // 10 rate - 1 min
 
 // GetDashboard: GET /api/public/dashboards/{token}
 func (h *PublicHandler) GetDashboard(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +78,7 @@ func (h *PublicHandler) GetDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Проверяем, что токен действителен и не истёк
+
 	var resp publicDashboardResponse
 	var dashboardID string
 	var layoutBytes []byte
@@ -135,7 +135,6 @@ func (h *PublicHandler) RunWidget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Проверяем, что токен действителен, не истёк, и виджет принадлежит дашборду
 	var savedQueryID string
 	var expiresAt sql.NullTime
 	if err := h.DB.QueryRowContext(r.Context(),
@@ -152,7 +151,7 @@ func (h *PublicHandler) RunWidget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Попробуем получить результат из кэша
+
 	cacheStore := cache.New(h.DB)
 	var cachedResult runResponse
 	cacheKey := "public_widget:" + widgetID + ":" + token
@@ -163,7 +162,6 @@ func (h *PublicHandler) RunWidget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Если не найдено — выполняем запрос
 	var sqlText, dataSourceID string
 	if err := h.DB.QueryRowContext(r.Context(),
 		`SELECT sql_text, data_source_id FROM saved_queries WHERE id = $1`, savedQueryID,
@@ -180,7 +178,7 @@ func (h *PublicHandler) RunWidget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Добавляем таймаут для публичных запросов (30 секунд)
+	// timeout 30sec
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
@@ -190,12 +188,12 @@ func (h *PublicHandler) RunWidget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Сохраняем в кэш на 5 минут (если результат не пустой)
+	// cesh save 5 min.
 	if len(result.Rows) > 0 {
 		_ = cacheStore.Set(r.Context(), cacheKey, result, 5*time.Minute)
 	}
 
-	// Логируем запрос для аудита (можно добавить в отдельную таблицу)
+	//log audit
 	log.Printf("[AUDIT] public widget run: token=%s, widget=%s, ip=%s, rows=%d", token, widgetID, ip, len(result.Rows))
 
 	w.Header().Set("Content-Type", "application/json")

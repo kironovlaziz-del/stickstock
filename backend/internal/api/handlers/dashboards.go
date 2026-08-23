@@ -21,6 +21,7 @@ type DashboardHandler struct {
 var allowedChartTypes = map[string]bool{
 	"line": true, "bar": true, "pie": true, "heatmap": true,
 	"table": true, "boxplot": true, "scatter": true, "treemap": true,
+	"kpi": true, "forecast": true,
 }
 
 type dashboardSummary struct {
@@ -550,7 +551,7 @@ func (h *DashboardHandler) CreateShareLink(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Устанавливаем срок действия 30 дней
+
 	expiresAt := time.Now().Add(30 * 24 * time.Hour)
 
 	if _, err := h.DB.ExecContext(r.Context(),
@@ -565,7 +566,7 @@ func (h *DashboardHandler) CreateShareLink(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(map[string]string{"share_token": token})
 }
 
-// randomShareToken генерирует 24-байтный случайный токен для публичных ссылок.
+// randomShareToken
 func randomShareToken() (string, error) {
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {

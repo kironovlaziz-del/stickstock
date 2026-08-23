@@ -3,8 +3,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import GridLayout, { WidthProvider } from "react-grid-layout";
-import "react-grid-layout/css/styles.css";
-import "react-resizable/css/styles.css";
 import { api } from "@/lib/api";
 import type { DashboardDetail, SavedQuery, ChartType, LayoutItem } from "@/lib/types";
 import { mergeLayout, GRID_COLS } from "@/lib/dashboardLayout";
@@ -20,6 +18,8 @@ const CHART_TYPES: ChartType[] = [
   "heatmap",
   "boxplot",
   "treemap",
+  "kpi",
+  "forecast",
 ];
 
 export default function DashboardEditPage() {
@@ -28,15 +28,25 @@ export default function DashboardEditPage() {
   const [dashboard, setDashboard] = useState<DashboardDetail | null>(null);
   const [layout, setLayout] = useState<LayoutItem[]>([]);
   const [queries, setQueries] = useState<SavedQuery[]>([]);
-  const [savedQueryId, setSavedQueryId] = useState("");
-  const [chartType, setChartType] = useState<ChartType>("bar");
   const [error, setError] = useState<string | null>(null);
   const [savingLayout, setSavingLayout] = useState(false);
+  const [editingWidget, setEditingWidget] = useState<any | null>(null);
+  const [widgetConfig, setWidgetConfig] = useState({
+    saved_query_id: "",
+    chart_type: "bar" as ChartType,
+    x_field: "",
+    y_field: "",
+    horizon: 10,
+  });
 
   const load = useCallback(async () => {
-    const d = await api.getDashboard(params.id);
-    setDashboard(d);
-    setLayout(mergeLayout(d.widgets, d.layout));
+    try {
+      const d = await api.getDashboard(params.id);
+      setDashboard(d);
+      setLayout(mergeLayout(d.widgets, d.layout));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }, [params.id]);
 
   useEffect(() => {
@@ -45,14 +55,10 @@ export default function DashboardEditPage() {
       .listQueries()
       .then((qs) => {
         setQueries(qs);
-        if (qs[0]) setSavedQueryId(qs[0].id);
       })
       .catch(() => {});
   }, [load]);
 
-  // Only persists on drag/resize *stop* (not react-grid-layout's more
-  // frequent onLayoutChange, which fires continuously mid-drag) — one API
-  // call per completed gesture instead of one per pixel of movement.
   async function persistLayout(next: LayoutItem[]) {
     setLayout(next);
     setSavingLayout(true);
@@ -65,24 +71,39 @@ export default function DashboardEditPage() {
     }
   }
 
-  async function handleAdd(e: React.FormEvent) {
-    e.preventDefault();
-    if (!savedQueryId) {
-      setError("Save a query first, then attach it here.");
-      return;
-    }
+  const handleSaveWidget = async () => {
+    if (!editingWidget) return;
     try {
-      await api.addWidget(params.id, { saved_query_id: savedQueryId, chart_type: chartType });
+      const payload = {
+        saved_query_id: widgetConfig.saved_query_id,
+        chart_type: widgetConfig.chart_type,
+        config: {
+          x_field: widgetConfig.x_field,
+          y_field: widgetConfig.y_field,
+          horizon: widgetConfig.horizon,
+        },
+      };
+      if (editingWidget.id) {
+        await api.updateWidget(params.id, editingWidget.id, payload);
+      } else {
+        await api.addWidget(params.id, payload);
+      }
+      setEditingWidget(null);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }
+  };
 
-  async function handleRemove(widgetId: string) {
-    await api.deleteWidget(params.id, widgetId);
-    await load();
-  }
+  const handleRemoveWidget = async (widgetId: string) => {
+    if (!confirm("Delete this widget?")) return;
+    try {
+      await api.deleteWidget(params.id, widgetId);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   if (!dashboard) return <p className="text-sm text-slate-500">Loading...</p>;
 
@@ -93,45 +114,28 @@ export default function DashboardEditPage() {
         <div className="flex items-center gap-3">
           {savingLayout && <span className="text-xs text-slate-500">Saving layout...</span>}
           <button
-            onClick={() => router.push(`/dashboards/${dashboard.id}`)}
+            onClick={() => {
+              setEditingWidget({ id: null, saved_query_id: "", chart_type: "bar", config: {} });
+              setWidgetConfig({
+                saved_query_id: queries[0]?.id || "",
+                chart_type: "bar",
+                x_field: "",
+                y_field: "",
+                horizon: 10,
+              });
+            }}
             className="focus-ring rounded-lg bg-accent-gradient px-4 py-2 text-sm font-semibold text-white"
+          >
+            Add Widget
+          </button>
+          <button
+            onClick={() => router.push(`/dashboards/${dashboard.id}`)}
+            className="focus-ring rounded-lg border border-white/10 px-4 py-2 text-sm font-medium hover:bg-white/5"
           >
             Done
           </button>
         </div>
       </div>
-
-      <form onSubmit={handleAdd} className="glass mb-6 space-y-3 rounded-2xl p-5">
-        <p className="text-sm font-semibold">Add a widget</p>
-        <select
-          value={savedQueryId}
-          onChange={(e) => setSavedQueryId(e.target.value)}
-          className="focus-ring w-full rounded-lg border border-white/10 bg-base-900 px-3 py-2 text-sm outline-none"
-        >
-          {queries.map((q) => (
-            <option key={q.id} value={q.id}>
-              {q.name}
-            </option>
-          ))}
-        </select>
-        <select
-          value={chartType}
-          onChange={(e) => setChartType(e.target.value as ChartType)}
-          className="focus-ring w-full rounded-lg border border-white/10 bg-base-900 px-3 py-2 text-sm outline-none"
-        >
-          {CHART_TYPES.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </select>
-        <button
-          type="submit"
-          className="focus-ring w-full rounded-lg border border-white/10 px-4 py-2 text-sm font-medium hover:bg-white/5"
-        >
-          Add widget
-        </button>
-      </form>
 
       {error && (
         <div className="mb-4 rounded-lg border border-down/30 bg-down/10 px-3 py-2 text-sm text-down">
@@ -154,22 +158,127 @@ export default function DashboardEditPage() {
             onResizeStop={(l) => persistLayout(l as LayoutItem[])}
           >
             {dashboard.widgets.map((w) => (
-              <div key={w.id} className="glass flex flex-col overflow-hidden rounded-2xl p-4">
+              <div key={w.id} className="glass flex flex-col overflow-hidden rounded-2xl p-4 relative">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <p className="truncate text-xs font-medium text-slate-400">
-                    {queries.find((q) => q.id === w.saved_query_id)?.name ?? w.saved_query_id} · {w.chart_type}
+                    {queries.find((q) => q.id === w.saved_query_id)?.name || w.saved_query_id} · {w.chart_type}
                   </p>
-                  <button
-                    onClick={() => handleRemove(w.id)}
-                    className="focus-ring shrink-0 rounded-md border border-down/30 px-2 py-0.5 text-xs text-down hover:bg-down/10"
-                  >
-                    Remove
-                  </button>
+                  <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
+                    <button
+                      onClick={() => {
+                        setEditingWidget(w);
+                        setWidgetConfig({
+                          saved_query_id: w.saved_query_id,
+                          chart_type: w.chart_type,
+                          x_field: (w.config as any)?.x_field || "",
+                          y_field: (w.config as any)?.y_field || "",
+                          horizon: (w.config as any)?.horizon || 10,
+                        });
+                      }}
+                      className="p-1 text-slate-500 hover:text-white transition text-sm"
+                    >
+                      ⚙️
+                    </button>
+                    <button
+                      onClick={() => handleRemoveWidget(w.id)}
+                      className="p-1 text-slate-500 hover:text-red-400 transition text-sm"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
           </Grid>
         </>
+      )}
+
+      {dashboard.widgets.length === 0 && (
+        <p className="text-sm text-slate-500">No widgets yet. Click "Add Widget" to start.</p>
+      )}
+
+      {editingWidget && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-base-900 p-6 rounded-2xl max-w-md w-full border border-white/10">
+            <h2 className="text-xl font-bold mb-4">
+              {editingWidget.id ? "Edit Widget" : "Add Widget"}
+            </h2>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Saved Query</label>
+                <select
+                  value={widgetConfig.saved_query_id}
+                  onChange={(e) => setWidgetConfig({...widgetConfig, saved_query_id: e.target.value})}
+                  className="w-full p-2 border border-white/10 rounded bg-base-800 text-white text-sm"
+                >
+                  <option value="">Select a query</option>
+                  {queries.map((q) => (
+                    <option key={q.id} value={q.id}>{q.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Chart Type</label>
+                <select
+                  value={widgetConfig.chart_type}
+                  onChange={(e) => setWidgetConfig({...widgetConfig, chart_type: e.target.value as ChartType})}
+                  className="w-full p-2 border border-white/10 rounded bg-base-800 text-white text-sm"
+                >
+                  {CHART_TYPES.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">X‑axis Field</label>
+                <input
+                  placeholder="e.g. product"
+                  value={widgetConfig.x_field}
+                  onChange={(e) => setWidgetConfig({...widgetConfig, x_field: e.target.value})}
+                  className="w-full p-2 border border-white/10 rounded bg-base-800 text-white text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Y‑axis Field</label>
+                <input
+                  placeholder="e.g. sales_count"
+                  value={widgetConfig.y_field}
+                  onChange={(e) => setWidgetConfig({...widgetConfig, y_field: e.target.value})}
+                  className="w-full p-2 border border-white/10 rounded bg-base-800 text-white text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Forecast Horizon (steps)</label>
+                <input
+                  type="number"
+                  placeholder="10"
+                  value={widgetConfig.horizon || 10}
+                  onChange={(e) =>
+                    setWidgetConfig({
+                      ...widgetConfig,
+                      horizon: parseInt(e.target.value) || 10,
+                    })
+                  }
+                  className="w-full p-2 border border-white/10 rounded bg-base-800 text-white text-sm"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                onClick={() => setEditingWidget(null)}
+                className="px-4 py-2 text-sm text-slate-400 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveWidget}
+                className="bg-accent-gradient px-4 py-2 rounded text-white text-sm font-semibold"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

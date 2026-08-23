@@ -72,7 +72,7 @@ func (h *ExportHandler) ExportSaved(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Добавляем h.EncryptionKey как пятый аргумент
+	// h.EncryptionKey 
 	kind, dsn, _, err := dataSourceForOwner(r.Context(), h.DB, dataSourceID, userID, h.EncryptionKey)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "data source not found")

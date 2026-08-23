@@ -1,6 +1,5 @@
 """POST /api/analytics/anomalies — flag outliers in numeric tabular data
 using PyOD's Isolation Forest, for fraud/error detection
-("Обнаружение мошенничества, ошибок")."""
 
 import numpy as np
 from fastapi import APIRouter, HTTPException

@@ -19,6 +19,7 @@ type Config struct {
 	DefaultLocale       string
 	AllowedOrigins      string
 	EncryptionKey       string
+	DeveloperUserID     string
 
 	// Delivery channels for cmd/worker's scheduled reports. Both optional —
 	// a deployment only using one of email/telegram doesn't need the other
@@ -43,6 +44,7 @@ func Load() (*Config, error) {
 		LocalesDir:          getEnv("LOCALES_DIR", "/app/locales"),
 		DefaultLocale:       getEnv("DEFAULT_LOCALE", "en"),
 		AllowedOrigins:      getEnv("ALLOWED_ORIGINS", "*"),
+		DeveloperUserID:     os.Getenv("DEVELOPER_USER_ID"),
 		SMTPHost:            os.Getenv("SMTP_HOST"),
 		SMTPPort:            getEnv("SMTP_PORT", "587"),
 		SMTPUsername:        os.Getenv("SMTP_USERNAME"),

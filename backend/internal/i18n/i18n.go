@@ -2,7 +2,7 @@
 // /locales at the repo root) and resolves translated strings for
 // server-generated messages (errors, emails, alert notifications).
 //
-// Supported locales: en, ru, uz, kk, tg.
+// Supported locales: en.
 package i18n
 
 import (
@@ -13,7 +13,7 @@ import (
 	"sync"
 )
 
-var SupportedLocales = []string{"en", "ru", "uz", "kk", "tg"}
+var SupportedLocales = []string{"en"}
 
 type Bundle struct {
 	mu       sync.RWMutex

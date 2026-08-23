@@ -19,8 +19,8 @@ import (
 	"time"
 )
 
-// allowedMethods — разрешённые HTTP-методы для REST-коннектора.
-// POST можно добавить при необходимости, но с осторожностью.
+// allowedMethods —  HTTP-metod REST-
+// POST
 var allowedMethods = map[string]bool{
 	http.MethodGet:  true,
 	http.MethodHead: true,
@@ -39,12 +39,11 @@ type restQuery struct {
 	ResultPath string            `json:"result_path"` // dot path to the array, if the response is a wrapped object
 }
 
-// isPrivateIP проверяет, принадлежит ли IP частному, локальному или диапазону метаданных.
+// isPrivateIP ,  IP local metadate
 func isPrivateIP(ip net.IP) bool {
 	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
 		return true
 	}
-	// Частные диапазоны IPv4
 	privateIPv4Blocks := []string{
 		"10.0.0.0/8",
 		"172.16.0.0/12",
@@ -64,7 +63,7 @@ func isPrivateIP(ip net.IP) bool {
 	return false
 }
 
-// validateRESTURL проверяет, что URL безопасен: схема HTTP/HTTPS, не ведёт на приватные IP и не содержит внутренних Docker-имён.
+// validateRESTURL private, - URL - HTTP/HTTPS, non private IP - Docker-
 func validateRESTURL(rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -73,7 +72,7 @@ func validateRESTURL(rawURL string) error {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return fmt.Errorf("only HTTP/HTTPS schemes are allowed")
 	}
-	// Разрешаем домен в IP
+
 	ips, err := net.LookupIP(u.Hostname())
 	if err != nil {
 		return fmt.Errorf("cannot resolve host: %w", err)
@@ -83,7 +82,7 @@ func validateRESTURL(rawURL string) error {
 			return fmt.Errorf("private/internal IP not allowed: %s", ip.String())
 		}
 	}
-	// Блокируем внутренние Docker-имена и localhost
+	// blocked Docker-name and localhost
 	forbiddenHosts := []string{"backend", "analytics-service", "nginx", "frontend", "localhost"}
 	hostname := strings.ToLower(u.Hostname())
 	for _, forbidden := range forbiddenHosts {
@@ -115,7 +114,6 @@ func NewRESTConnector(dsn string) (*RESTConnector, error) {
 		return nil, fmt.Errorf("REST connector needs a base URL")
 	}
 
-	// Валидируем базовый URL
 	if err := validateRESTURL(baseURL); err != nil {
 		return nil, fmt.Errorf("URL validation failed: %w", err)
 	}
@@ -165,12 +163,12 @@ func (c *RESTConnector) Query(ctx context.Context, query string, args ...interfa
 	if q.Method == "" {
 		q.Method = http.MethodGet
 	}
-	// Проверяем, разрешён ли метод
+
 	if !allowedMethods[q.Method] {
 		return nil, fmt.Errorf("method %q is not allowed", q.Method)
 	}
 
-	// Формируем полный URL и валидируем его
+	//URL validate
 	fullURL := c.baseURL + q.Path
 	if err := validateRESTURL(fullURL); err != nil {
 		return nil, fmt.Errorf("target URL validation failed: %w", err)
@@ -189,7 +187,7 @@ func (c *RESTConnector) Query(ctx context.Context, query string, args ...interfa
 	}
 	c.applyHeaders(req)
 
-	// Настраиваем клиент с проверкой редиректов на приватные адреса
+	// setting private client
 	redirectChecker := func(req *http.Request, via []*http.Request) error {
 		if err := validateRESTURL(req.URL.String()); err != nil {
 			return fmt.Errorf("redirect blocked: %w", err)

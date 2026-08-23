@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 
-const SUPPORTED_LOCALES = ["en", "ru", "uz", "kk", "tg"];
+const SUPPORTED_LOCALES = ["en"];
 
 export default function SignupPage() {
   const router = useRouter();

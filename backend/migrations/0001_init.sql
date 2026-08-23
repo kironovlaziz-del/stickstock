@@ -58,7 +58,6 @@ CREATE TABLE IF NOT EXISTS saved_queries (
 );
 
 -- Every edit to a saved query is archived here, giving Git-like history
--- (see the "История версий запросов" requirement).
 CREATE TABLE IF NOT EXISTS saved_query_versions (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     saved_query_id  UUID NOT NULL REFERENCES saved_queries(id) ON DELETE CASCADE,
@@ -84,7 +83,6 @@ CREATE TABLE IF NOT EXISTS dashboard_widgets (
 );
 
 -- Scheduled automation: run a saved query on a cron schedule and deliver
--- results via email/Telegram (see "Автоматизация" requirement).
 CREATE TABLE IF NOT EXISTS scheduled_reports (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     owner_id        UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,

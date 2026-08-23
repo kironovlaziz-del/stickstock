@@ -20,7 +20,6 @@ func (h *SchemaHandler) Get(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
 	id := r.PathValue("id")
 
-	// Добавляем h.EncryptionKey как пятый аргумент
 	kind, dsn, _, err := dataSourceForOwner(r.Context(), h.DB, id, userID, h.EncryptionKey)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "data source not found")

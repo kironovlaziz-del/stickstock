@@ -23,7 +23,7 @@ type commentResponse struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// validateWidgetOwnership проверяет, что widget_id существует и принадлежит dashboard_id.
+// validateWidgetOwnership  widget_id  dashboard_id.
 func validateWidgetOwnership(ctx context.Context, db *sql.DB, dashboardID, widgetID string) error {
 	var exists bool
 	err := db.QueryRowContext(ctx,

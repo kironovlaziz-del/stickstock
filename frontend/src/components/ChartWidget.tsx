@@ -46,6 +46,28 @@ export default function ChartWidget({
   const [xKey, ...restKeys] = result.columns;
   const yKeys = restKeys.length > 0 ? restKeys : [xKey];
 
+  // ---------- KPI Card ----------
+  if (chartType === "kpi") {
+    const firstRow = result.rows[0];
+    let value: number | null = null;
+    if (firstRow) {
+      for (const cell of firstRow) {
+        if (typeof cell === "number" && !isNaN(cell)) {
+          value = cell;
+          break;
+        }
+      }
+    }
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-5xl font-bold text-white">
+          {value !== null ? value.toLocaleString() : "—"}
+        </div>
+      </div>
+    );
+  }
+
+  // ---------- Table ----------
   if (chartType === "table") {
     return (
       <div className="overflow-auto">
@@ -75,6 +97,7 @@ export default function ChartWidget({
     );
   }
 
+  // ---------- Pie ----------
   if (chartType === "pie") {
     const valueKey = yKeys[0];
     return (
@@ -91,6 +114,7 @@ export default function ChartWidget({
     );
   }
 
+  // ---------- Bar ----------
   if (chartType === "bar") {
     return (
       <ResponsiveContainer width="100%" height={260}>
@@ -107,6 +131,7 @@ export default function ChartWidget({
     );
   }
 
+  // ---------- Scatter ----------
   if (chartType === "scatter") {
     return (
       <ResponsiveContainer width="100%" height={260}>
@@ -121,9 +146,35 @@ export default function ChartWidget({
     );
   }
 
-  // line / heatmap / boxplot / treemap: a line chart is a reasonable
-  // default render until those get dedicated implementations — see
-  // README roadmap. Better to show *something* correct than nothing.
+  // ---------- Forecast ----------
+  if (chartType === "forecast") {
+    return (
+      <ResponsiveContainer width="100%" height={260}>
+        <LineChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+          <XAxis dataKey={xKey} stroke="#8b93a7" fontSize={12} />
+          <YAxis stroke="#8b93a7" fontSize={12} />
+          <Tooltip contentStyle={TOOLTIP_STYLE} />
+          {yKeys.map((k, i) => {
+            const isForecast = k.toLowerCase().includes("forecast") || k.toLowerCase().includes("predicted");
+            return (
+              <Line
+                key={k}
+                type="monotone"
+                dataKey={k}
+                stroke={PALETTE[i % PALETTE.length]}
+                strokeWidth={2}
+                strokeDasharray={isForecast ? "5 5" : "0"}
+                dot={false}
+              />
+            );
+          })}
+        </LineChart>
+      </ResponsiveContainer>
+    );
+  }
+
+  // ---------- Default: Line (also used for heatmap/boxplot/treemap fallback) ----------
   return (
     <ResponsiveContainer width="100%" height={260}>
       <LineChart data={data}>

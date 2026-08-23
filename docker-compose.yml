@@ -31,7 +31,6 @@ services:
       UPLOAD_DIR: /data/uploads
     # No external API keys needed — Polars/DuckDB/statsmodels/PyOD all run
     # locally in this container.
-
   frontend:
     build:
       context: ./frontend

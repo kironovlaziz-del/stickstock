@@ -77,7 +77,7 @@ func (s *Store) Delete(ctx context.Context, key string) error {
 }
 
 // Cleanup removes all expired rows — call this from the scheduled worker
-// (see README "Воркер") rather than a background goroutine, to match the
+// (see README "Worker") rather than a background goroutine, to match the
 // "don't keep processes running, invoke on a schedule" approach the
 // recommended architecture uses for the worker.
 func (s *Store) Cleanup(ctx context.Context) (int64, error) {

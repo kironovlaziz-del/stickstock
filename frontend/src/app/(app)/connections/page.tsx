@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { DataSource } from "@/lib/types";
 import { useI18n } from "@/lib/i18n";
+import { SkeletonTableRow } from "@/components/Skeleton";
 
 // postgres/mysql/mongodb/rest are all wired up in the Go backend now.
 // "file" is deliberately excluded here — file sources are created via
@@ -61,15 +62,16 @@ export default function ConnectionsPage() {
   }
 
   async function handleDelete(id: string) {
-  console.log('Deleting id:', id); // 🔥 Проверьте, какой ID передаётся
-  if (!confirm("Удалить это подключение? Все связанные запросы станут нерабочими.")) return;
-  try {
-    await api.deleteDataSource(id);
-    await load();
-  } catch (e) {
-    setError(e instanceof Error ? e.message : String(e));
+    console.log("Deleting id:", id);
+    if (!confirm("Delete this connection? All related queries will become non-functional.")) return;
+    try {
+      await api.deleteDataSource(id);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }
-}
+
   return (
     <div className="mx-auto max-w-3xl">
       <div className="mb-6 flex items-center justify-between">
@@ -137,7 +139,12 @@ export default function ConnectionsPage() {
       )}
 
       {loading ? (
-        <p className="text-sm text-slate-500">{t("common.loading")}</p>
+        <div className="space-y-2">
+          <SkeletonTableRow />
+          <SkeletonTableRow />
+          <SkeletonTableRow />
+          <SkeletonTableRow />
+        </div>
       ) : sources.length === 0 ? (
         <p className="text-sm text-slate-500">No connections yet. Add one to get started.</p>
       ) : (
@@ -152,7 +159,7 @@ export default function ConnectionsPage() {
                 onClick={() => handleDelete(s.id)}
                 className="text-sm font-medium text-down hover:text-down/80 transition"
               >
-                Удалить
+                Delete
               </button>
             </div>
           ))}

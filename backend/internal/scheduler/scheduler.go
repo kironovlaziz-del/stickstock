@@ -43,7 +43,7 @@ type dueReport struct {
 	DeliveryKind   string
 	DeliveryTarget string
 	LastRunAt      sql.NullTime
-	NextRunAt      sql.NullTime // новое поле
+	NextRunAt      sql.NullTime
 }
 
 // RunDue finds every active scheduled report whose cron schedule says
@@ -54,8 +54,6 @@ type dueReport struct {
 func RunDue(ctx context.Context, db *sql.DB, cfg Config) error {
 	now := time.Now()
 
-	// Выбираем отчёты, у которых next_run_at <= now (или NULL, если ещё не запускались)
-	// Используем FOR UPDATE SKIP LOCKED для безопасной блокировки.
 	rows, err := db.QueryContext(ctx,
 		`SELECT id, saved_query_id, cron_expr, delivery_kind, delivery_target, last_run_at, next_run_at
 		 FROM scheduled_reports
@@ -85,22 +83,18 @@ func RunDue(ctx context.Context, db *sql.DB, cfg Config) error {
 	ran, skipped := 0, 0
 
 	for _, r := range due {
-		// Парсим cron-выражение
 		schedule, err := cronParser.Parse(r.CronExpr)
 		if err != nil {
 			log.Printf("scheduler: report %s has invalid cron_expr %q: %v", r.ID, r.CronExpr, err)
 			continue
 		}
 
-		// Вычисляем следующее время запуска на основе last_run_at
 		var nextRun time.Time
 		if r.LastRunAt.Valid {
 			nextRun = schedule.Next(r.LastRunAt.Time)
 		} else {
-			// Если никогда не запускался, то запускаем сразу (или с учётом времени создания)
 			nextRun = now
 		}
-		// Обновляем next_run_at в базе атомарно (только если оно не изменилось)
 		res, err := db.ExecContext(ctx,
 			`UPDATE scheduled_reports
 			 SET next_run_at = $1
@@ -111,21 +105,16 @@ func RunDue(ctx context.Context, db *sql.DB, cfg Config) error {
 			continue
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
-			// Кто-то другой уже обработал этот отчёт
 			skipped++
 			continue
 		}
 
-		// Выполняем отчёт
 		if err := runOne(ctx, db, cfg, r); err != nil {
 			log.Printf("scheduler: report %s failed: %v", r.ID, err)
-			// Не помечаем как запущенный, чтобы повторить позже (можно добавить счётчик попыток)
 			continue
 		}
 		ran++
 
-		// Обновляем last_run_at и next_run_at после успешного выполнения
-		// next_run_at вычисляем заново, чтобы избежать дрейфа времени
 		nextRunAfter := schedule.Next(time.Now())
 		if _, err := db.ExecContext(ctx,
 			`UPDATE scheduled_reports

@@ -103,7 +103,7 @@ func (c *MySQLConnector) Query(ctx context.Context, query string, args ...interf
 	rowCount := 0
 	for rows.Next() {
 		if rowCount >= maxRows {
-			// Достигнут лимит — прекращаем чтение
+
 			break
 		}
 		vals := make([]interface{}, len(cols))

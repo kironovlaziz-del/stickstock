@@ -17,7 +17,7 @@ import (
 
 type QueryHandler struct {
 	DB             *sql.DB
-	EncryptionKey  string // ключ для AES-256-GCM
+	EncryptionKey  string // key for AES-256-GCM
 }
 
 const maxResultRows = 1000
@@ -46,7 +46,7 @@ func dataSourceForOwner(ctx context.Context, db *sql.DB, id, ownerID, encryption
     if kind != string(connectors.KindFile) && dsn != "" {
         decrypted, err := crypto.Decrypt(encryptionKey, dsn)
         if err != nil {
-            // Если не удалось расшифровать, используем DSN как открытый текст (легаси-данные)
+
             log.Printf("WARNING: Decrypt error for id %s: %v — using plaintext DSN", id, err)
         } else {
             dsn = decrypted

@@ -12,6 +12,7 @@ import (
 func NewRouter(cfg *config.Config, database *sql.DB) http.Handler {
 	mux := http.NewServeMux()
 
+	// Handlers
 	dsHandler := &handlers.DataSourceHandler{DB: database, EncryptionKey: cfg.EncryptionKey}
 	queryHandler := &handlers.QueryHandler{DB: database, EncryptionKey: cfg.EncryptionKey}
 	dashboardHandler := &handlers.DashboardHandler{DB: database}
@@ -24,22 +25,18 @@ func NewRouter(cfg *config.Config, database *sql.DB) http.Handler {
 	commentHandler := &handlers.CommentHandler{DB: database}
 	publicHandler := &handlers.PublicHandler{DB: database}
 	adminHandler := &handlers.AdminHandler{DB: database}
+	analyticsHandler := &handlers.AnalyticsHandler{AnalyticsServiceURL: cfg.AnalyticsServiceURL}
 
+	// Middleware
 	auth := middleware.RequireAuth(cfg.JWTSecret, cfg.SupabaseURL, database)
 	admin := middleware.RequireAdmin(database)
 
-	// Public routes. Registration/login now happen on the frontend via
-	// Supabase Auth (supabase-js) — this backend only verifies the JWTs
-	// Supabase issues (see middleware.RequireAuth) and never sees passwords.
+	// Public routes
 	mux.HandleFunc("GET /api/health", handlers.Health(database))
-
-	// Also public: shared dashboards. The share_token itself is the
-	// credential (see DashboardHandler.CreateShareLink) — no Supabase
-	// session involved, so these deliberately aren't wrapped in `auth`.
 	mux.HandleFunc("GET /api/public/dashboards/{token}", publicHandler.GetDashboard)
 	mux.HandleFunc("POST /api/public/dashboards/{token}/widgets/{widget_id}/run", publicHandler.RunWidget)
 
-	// Protected routes.
+	// Protected routes (require auth)
 	mux.Handle("GET /api/me", auth(http.HandlerFunc(profileHandler.Get)))
 	mux.Handle("PUT /api/me", auth(http.HandlerFunc(profileHandler.Update)))
 
@@ -83,7 +80,6 @@ func NewRouter(cfg *config.Config, database *sql.DB) http.Handler {
 	mux.Handle("PUT /api/admin/users/{id}", auth(admin(http.HandlerFunc(adminHandler.UpdateUser))))
 	mux.Handle("GET /api/admin/stats", auth(admin(http.HandlerFunc(adminHandler.Stats))))
 
-
 	mux.Handle("POST /api/reports", auth(http.HandlerFunc(reportHandler.Create)))
 	mux.Handle("GET /api/reports", auth(http.HandlerFunc(reportHandler.List)))
 	mux.Handle("PUT /api/reports/{id}", auth(http.HandlerFunc(reportHandler.Update)))
@@ -92,8 +88,15 @@ func NewRouter(cfg *config.Config, database *sql.DB) http.Handler {
 	mux.Handle("GET /api/queries/{id}/export", auth(http.HandlerFunc(exportHandler.ExportSaved)))
 	mux.Handle("POST /api/export/query", auth(http.HandlerFunc(exportHandler.ExportAdHoc)))
 
-	// Global middleware chain: locale resolution wraps everything so both
-	// public and protected handlers can read the caller's language.
+	// Analytics routes (proxy to Python analytics-service)
+	mux.Handle("POST /api/analytics/aggregate", auth(http.HandlerFunc(analyticsHandler.Aggregate)))
+	mux.Handle("POST /api/analytics/query", auth(http.HandlerFunc(analyticsHandler.Query)))
+	mux.Handle("POST /api/analytics/stats/regression", auth(http.HandlerFunc(analyticsHandler.Regression)))
+	mux.Handle("POST /api/analytics/stats/ttest", auth(http.HandlerFunc(analyticsHandler.TTest)))
+	mux.Handle("POST /api/analytics/stats/forecast", auth(http.HandlerFunc(analyticsHandler.Forecast)))
+	mux.Handle("POST /api/analytics/anomalies", auth(http.HandlerFunc(analyticsHandler.Anomalies)))
+
+	// Global middleware chain
 	var handler http.Handler = mux
 	handler = middleware.Locale(cfg.DefaultLocale)(handler)
 	handler = corsMiddleware(cfg.AllowedOrigins)(handler)
