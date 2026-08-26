@@ -30,7 +30,6 @@ func NewRouter(cfg *config.Config, database *sql.DB) http.Handler {
 		AppURL:    getEnvOrDefault("APP_URL", "https://stickstock.lol"),
 	}
 	publicHandler := &handlers.PublicHandler{DB: database}
-	adminHandler := &handlers.AdminHandler{DB: database}
 	analyticsHandler := &handlers.AnalyticsHandler{AnalyticsServiceURL: cfg.AnalyticsServiceURL}
 	analyticsTaskHandler := &handlers.AnalyticsTaskHandler{
 		DB:                  database,
@@ -39,7 +38,6 @@ func NewRouter(cfg *config.Config, database *sql.DB) http.Handler {
 
 	// ── Middleware factories ─────────────────────────────────────
 	auth := middleware.RequireAuth(cfg.JWTSecret, cfg.SupabaseURL, database)
-	admin := middleware.RequireAdmin(database)
 
 	// ── Public routes ────────────────────────────────────────────
 	mux.HandleFunc("POST /api/auth/register", authHandler.Register)
@@ -89,9 +87,6 @@ func NewRouter(cfg *config.Config, database *sql.DB) http.Handler {
 
 	mux.Handle("GET /api/lineage", auth(http.HandlerFunc(lineageHandler.Get)))
 
-	mux.Handle("GET /api/admin/users", auth(admin(http.HandlerFunc(adminHandler.ListUsers))))
-	mux.Handle("PUT /api/admin/users/{id}", auth(admin(http.HandlerFunc(adminHandler.UpdateUser))))
-	mux.Handle("GET /api/admin/stats", auth(admin(http.HandlerFunc(adminHandler.Stats))))
 
 	mux.Handle("POST /api/reports", auth(http.HandlerFunc(reportHandler.Create)))
 	mux.Handle("GET /api/reports", auth(http.HandlerFunc(reportHandler.List)))
