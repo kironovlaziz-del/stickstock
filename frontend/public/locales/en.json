@@ -28,7 +28,6 @@
   "common.export": "Export",
   "ai.assistant": "AI Assistant",
   "ai.ask_placeholder": "Ask about your data...",
-  "nav.osint": "OSINT",
   "nav.reports": "Reports",
   "nav.admin": "Admin"
 }

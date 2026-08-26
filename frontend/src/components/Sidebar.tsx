@@ -1,14 +1,15 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
 
 const NAV = [
-  { href: "/dashboards", key: "nav.dashboards", icon: "▦" },
-  { href: "/queries", key: "nav.queries", icon: "⌁" },
-  { href: "/connections", key: "nav.connections", icon: "◈" },
-  { href: "/reports", key: "nav.reports", icon: "📅" },
+  { href: "/dashboards", label: "Dashboards", icon: "▦" },
+  { href: "/queries", label: "Queries", icon: "⌁" },
+  { href: "/connections", label: "Connections", icon: "◈" },
+  { href: "/reports", label: "Reports", icon: "📅" },
 ];
 
 export default function Sidebar() {
@@ -17,9 +18,16 @@ export default function Sidebar() {
 
   return (
     <aside className="glass flex w-60 flex-col gap-1 border-r border-white/5 p-4">
-      <div className="mb-6 flex items-center gap-2 px-2">
-        <div className="h-7 w-7 rounded-lg bg-accent-gradient" />
-        <span className="text-base font-bold tracking-tight">{t("app.name")}</span>
+      <div className="mb-6 px-2">
+        <Image
+          src="logotip.png"
+          alt="Stickstock"
+          width={150}
+          height={40}
+          priority
+          unoptimized
+          style={{ objectFit: "contain" }}
+        />
       </div>
 
       {NAV.map((item) => {
@@ -35,7 +43,7 @@ export default function Sidebar() {
             }`}
           >
             <span aria-hidden>{item.icon}</span>
-            {t(item.key)}
+            {item.label}
           </Link>
         );
       })}
