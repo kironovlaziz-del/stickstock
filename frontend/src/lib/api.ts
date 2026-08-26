@@ -1,4 +1,3 @@
-import { createClient } from "@/lib/supabase/client";
 import type {
   Profile,
   DataSource,
@@ -15,17 +14,17 @@ import type {
   ScheduledReport,
   AdminUser,
   AdminStats,
-
 } from "@/lib/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
 
+// 🔑 Кастомная авторизация: читаем токен из localStorage
 async function authHeader(): Promise<Record<string, string>> {
-  const supabase = createClient();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  return session ? { Authorization: `Bearer ${session.access_token}` } : {};
+  let token = null;
+  if (typeof window !== "undefined") {
+    token = localStorage.getItem("ss_token");
+  }
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -93,7 +92,6 @@ async function downloadBlob(path: string, init: RequestInit, filenameFallback: s
 
 export type ExportFormat = "csv" | "xlsx" | "pdf";
 
-
 export const api = {
   me: () => request<Profile>("/me"),
   updateLocale: (locale: string) =>
@@ -102,7 +100,7 @@ export const api = {
   listDataSources: () => request<DataSource[]>("/datasources"),
   createDataSource: (body: { name: string; kind: string; dsn: string }) =>
     request<DataSource>("/datasources", { method: "POST", body: JSON.stringify(body) }),
-    deleteDataSource: (id: string) => request<void>(`/datasources/${id}`, { method: "DELETE" }),
+  deleteDataSource: (id: string) => request<void>(`/datasources/${id}`, { method: "DELETE" }),
   getSchema: (dataSourceId: string) =>
     request<{ tables: TableInfo[] }>(`/datasources/${dataSourceId}/schema`),
 
@@ -150,47 +148,46 @@ export const api = {
     }),
   deleteWidget: (dashboardId: string, widgetId: string) =>
     request<void>(`/dashboards/${dashboardId}/widgets/${widgetId}`, { method: "DELETE" }),
-
   updateWidget: (
-  dashboardId: string,
-  widgetId: string,
-  body: { saved_query_id: string; chart_type: string; config?: Record<string, unknown> }
-) =>
-  request<Widget>(`/dashboards/${dashboardId}/widgets/${widgetId}`, {
-    method: "PUT",
-    body: JSON.stringify(body),
-  }),
-
-  forecast: (body: { x: number[]; y: number[]; horizon: number }) =>
-  request<{ forecast: number[] }>("/analytics/forecast", {
-    method: "POST",
-    body: JSON.stringify(body),
-  }),
+    dashboardId: string,
+    widgetId: string,
+    body: { saved_query_id: string; chart_type: string; config?: Record<string, unknown> }
+  ) =>
+    request<Widget>(`/dashboards/${dashboardId}/widgets/${widgetId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
 
   // --- Analytics (proxy to Python service) ---
-aggregate: (body: {
-  columns: string[];
-  rows: any[][];
-  filters?: Array<{ column: string; op: string; value: any }>;
-  group_by?: string[];
-  aggregations?: Array<{ column: string; func: string; alias?: string }>;
-}) => request<any>("/analytics/aggregate", { method: "POST", body: JSON.stringify(body) }),
+  aggregate: (body: {
+    columns: string[];
+    rows: any[][];
+    filters?: Array<{ column: string; op: string; value: any }>;
+    group_by?: string[];
+    aggregations?: Array<{ column: string; func: string; alias?: string }>;
+  }) => request<any>("/analytics/aggregate", { method: "POST", body: JSON.stringify(body) }),
 
-queryCSV: (body: { csv_content: string; sql: string; delimiter?: string; limit?: number }) =>
-  request<any>("/analytics/query", { method: "POST", body: JSON.stringify(body) }),
+  queryCSV: (body: { csv_content: string; sql: string; delimiter?: string; limit?: number }) =>
+    request<any>("/analytics/query", { method: "POST", body: JSON.stringify(body) }),
 
-regression: (body: { y: number[]; x: number[][] }) =>
-  request<any>("/analytics/stats/regression", { method: "POST", body: JSON.stringify(body) }),
+  regression: (body: { y: number[]; x: number[][] }) =>
+    request<any>("/analytics/stats/regression", { method: "POST", body: JSON.stringify(body) }),
 
-ttest: (body: { sample_a: number[]; sample_b: number[] }) =>
-  request<any>("/analytics/stats/ttest", { method: "POST", body: JSON.stringify(body) }),
+  ttest: (body: { sample_a: number[]; sample_b: number[] }) =>
+    request<any>("/analytics/stats/ttest", { method: "POST", body: JSON.stringify(body) }),
 
-statsForecast: (body: { series: number[]; periods?: number; order?: number[] }) =>
-  request<any>("/analytics/stats/forecast", { method: "POST", body: JSON.stringify(body) }),
+  statsForecast: (body: { series: number[]; periods?: number; order?: number[] }) =>
+    request<any>("/analytics/stats/forecast", { method: "POST", body: JSON.stringify(body) }),
 
-anomalies: (body: { columns: string[]; rows: number[][]; contamination?: number }) =>
-  request<any>("/analytics/anomalies", { method: "POST", body: JSON.stringify(body) }),
-  
+  anomalies: (body: { columns: string[]; rows: number[][]; contamination?: number }) =>
+    request<any>("/analytics/anomalies", { method: "POST", body: JSON.stringify(body) }),
+
+  forecast: (body: { x: number[]; y: number[]; horizon: number }) =>
+    request<{ forecast: number[] }>("/analytics/forecast", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
   // --- Sharing & collaborators ---
   createShareLink: (dashboardId: string) =>
     request<{ share_token: string }>(`/dashboards/${dashboardId}/share`, { method: "POST" }),
@@ -237,7 +234,4 @@ anomalies: (body: { columns: string[]; rows: number[][]; contamination?: number 
   adminUpdateUser: (id: string, body: Partial<{ is_admin: boolean; is_blocked: boolean }>) =>
     request<void>(`/admin/users/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   adminStats: () => request<AdminStats>("/admin/stats"),
-
 };
-
-

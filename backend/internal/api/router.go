@@ -3,6 +3,7 @@ package api
 import (
 	"database/sql"
 	"net/http"
+	"os"
 
 	"stickstock/backend/internal/api/handlers"
 	"stickstock/backend/internal/api/middleware"
@@ -12,7 +13,7 @@ import (
 func NewRouter(cfg *config.Config, database *sql.DB) http.Handler {
 	mux := http.NewServeMux()
 
-	// Handlers
+	// ── Handlers ──────────────────────────────────────────────────
 	dsHandler := &handlers.DataSourceHandler{DB: database, EncryptionKey: cfg.EncryptionKey}
 	queryHandler := &handlers.QueryHandler{DB: database, EncryptionKey: cfg.EncryptionKey}
 	dashboardHandler := &handlers.DashboardHandler{DB: database}
@@ -23,20 +24,32 @@ func NewRouter(cfg *config.Config, database *sql.DB) http.Handler {
 	schemaHandler := &handlers.SchemaHandler{DB: database, EncryptionKey: cfg.EncryptionKey}
 	lineageHandler := &handlers.LineageHandler{DB: database}
 	commentHandler := &handlers.CommentHandler{DB: database}
+	authHandler := &handlers.AuthHandler{
+		DB:        database,
+		JWTSecret: cfg.JWTSecret,
+		AppURL:    getEnvOrDefault("APP_URL", "https://stickstock.lol"),
+	}
 	publicHandler := &handlers.PublicHandler{DB: database}
 	adminHandler := &handlers.AdminHandler{DB: database}
 	analyticsHandler := &handlers.AnalyticsHandler{AnalyticsServiceURL: cfg.AnalyticsServiceURL}
+	analyticsTaskHandler := &handlers.AnalyticsTaskHandler{
+		DB:                  database,
+		AnalyticsServiceURL: cfg.AnalyticsServiceURL,
+	}
 
-	// Middleware
+	// ── Middleware factories ─────────────────────────────────────
 	auth := middleware.RequireAuth(cfg.JWTSecret, cfg.SupabaseURL, database)
 	admin := middleware.RequireAdmin(database)
 
-	// Public routes
+	// ── Public routes ────────────────────────────────────────────
+	mux.HandleFunc("POST /api/auth/register", authHandler.Register)
+	mux.HandleFunc("POST /api/auth/login", authHandler.Login)
+	mux.HandleFunc("POST /api/auth/logout", authHandler.Logout)
 	mux.HandleFunc("GET /api/health", handlers.Health(database))
 	mux.HandleFunc("GET /api/public/dashboards/{token}", publicHandler.GetDashboard)
 	mux.HandleFunc("POST /api/public/dashboards/{token}/widgets/{widget_id}/run", publicHandler.RunWidget)
 
-	// Protected routes (require auth)
+	// ── Protected routes (require auth) ─────────────────────────
 	mux.Handle("GET /api/me", auth(http.HandlerFunc(profileHandler.Get)))
 	mux.Handle("PUT /api/me", auth(http.HandlerFunc(profileHandler.Update)))
 
@@ -88,7 +101,7 @@ func NewRouter(cfg *config.Config, database *sql.DB) http.Handler {
 	mux.Handle("GET /api/queries/{id}/export", auth(http.HandlerFunc(exportHandler.ExportSaved)))
 	mux.Handle("POST /api/export/query", auth(http.HandlerFunc(exportHandler.ExportAdHoc)))
 
-	// Analytics routes (proxy to Python analytics-service)
+	// ── Analytics routes (proxy to Python service) ──────────────
 	mux.Handle("POST /api/analytics/aggregate", auth(http.HandlerFunc(analyticsHandler.Aggregate)))
 	mux.Handle("POST /api/analytics/query", auth(http.HandlerFunc(analyticsHandler.Query)))
 	mux.Handle("POST /api/analytics/stats/regression", auth(http.HandlerFunc(analyticsHandler.Regression)))
@@ -96,9 +109,13 @@ func NewRouter(cfg *config.Config, database *sql.DB) http.Handler {
 	mux.Handle("POST /api/analytics/stats/forecast", auth(http.HandlerFunc(analyticsHandler.Forecast)))
 	mux.Handle("POST /api/analytics/anomalies", auth(http.HandlerFunc(analyticsHandler.Anomalies)))
 
-	// Global middleware chain
-	var handler http.Handler = mux
-	handler = middleware.Locale(cfg.DefaultLocale)(handler)
+	// ── Async analytics tasks ────────────────────────────────────
+	mux.Handle("POST /api/analytics/tasks", auth(http.HandlerFunc(analyticsTaskHandler.CreateTask)))
+	mux.Handle("GET /api/analytics/tasks/{id}", auth(http.HandlerFunc(analyticsTaskHandler.GetTask)))
+
+	// ── Global middleware chain ──────────────────────────────────
+	handler := middleware.Locale(cfg.DefaultLocale)(mux)
+	handler = middleware.AuditMiddleware(database)(handler)
 	handler = corsMiddleware(cfg.AllowedOrigins)(handler)
 
 	return handler
@@ -117,4 +134,11 @@ func corsMiddleware(allowedOrigins string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func getEnvOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }

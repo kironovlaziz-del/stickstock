@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"stickstock/backend/internal/api/middleware"
@@ -17,7 +18,7 @@ type DataSourceHandler struct {
 
 type createDataSourceRequest struct {
 	Name string `json:"name"`
-	Kind string `json:"kind"` // postgres | mysql | mongodb | rest | file
+	Kind string `json:"kind"`
 	DSN  string `json:"dsn"`
 }
 
@@ -27,7 +28,6 @@ type dataSourceResponse struct {
 	Kind string `json:"kind"`
 }
 
-// List returns the caller's saved connections (never the DSN itself).
 func (h *DataSourceHandler) List(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
 
@@ -53,10 +53,13 @@ func (h *DataSourceHandler) List(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(out)
 }
 
-// Create saves a new connection after test-pinging it via whichever
-// connector matches Kind. DSN is encrypted at rest using AES-256-GCM.
 func (h *DataSourceHandler) Create(w http.ResponseWriter, r *http.Request) {
-	userID, _ := middleware.UserIDFromContext(r.Context())
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok || userID == "" {
+		writeJSONError(w, http.StatusUnauthorized, "user not authenticated")
+		return
+	}
+	log.Printf("Create data source: userID=%s", userID)
 
 	var req createDataSourceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.DSN == "" {
@@ -100,56 +103,21 @@ func (h *DataSourceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("Data source created: id=%s, name=%s", id, req.Name)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(dataSourceResponse{ID: id, Name: req.Name, Kind: req.Kind})
 }
 
-// Delete removes a data source and, if it is a file upload, drops the
-// underlying uploads-schema table to prevent accumulation of orphaned
-// tables. DELETE /api/datasources/{id}
 func (h *DataSourceHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	userID, _ := middleware.UserIDFromContext(r.Context())
 	id := r.PathValue("id")
-
-	var kind, fileTable string
-	err := h.DB.QueryRowContext(r.Context(),
-		`SELECT kind, file_table FROM data_sources WHERE id = $1 AND owner_id = $2`,
-		id, userID,
-	).Scan(&kind, &fileTable)
+	log.Printf("Deleting data source: id=%s", id)
+	_, err := h.DB.ExecContext(r.Context(), `DELETE FROM data_sources WHERE id = $1`, id)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, "data source not found")
-		return
-	}
-
-	tx, err := h.DB.BeginTx(r.Context(), nil)
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "could not start transaction")
-		return
-	}
-	defer tx.Rollback()
-
-	if kind == "file" && fileTable != "" {
-		if err := DeleteUploadTable(r.Context(), tx, fileTable); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, "could not drop upload table: "+err.Error())
-			return
-		}
-	}
-
-	res, err := tx.ExecContext(r.Context(),
-		`DELETE FROM data_sources WHERE id = $1 AND owner_id = $2`, id, userID)
-	if err != nil {
+		log.Printf("Delete error: %v", err)
 		writeJSONError(w, http.StatusInternalServerError, "could not delete data source")
 		return
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		writeJSONError(w, http.StatusNotFound, "data source not found")
-		return
-	}
-
-	if err := tx.Commit(); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "could not commit transaction")
-		return
-	}
+	log.Printf("Data source deleted: id=%s", id)
 	w.WriteHeader(http.StatusNoContent)
 }

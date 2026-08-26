@@ -148,6 +148,15 @@ POST /api/reports	                                                        Schedu
 
 Full OpenAPI documentation will be generated after we integrate swaggo/swag.
 
+## Backup
+
+- **Postgres**: run `./scripts/backup_all.sh` (requires `pg_dump`).
+- **MySQL**: install `mysqldump` and the script will work.
+- **MongoDB**: install `mongodump` and the script will work.
+- **REST/File**: backup the data files manually (CSV, JSON).
+
+For Supabase, you can also enable automated backups in the Supabase dashboard.
+
 
 ## Testing
 

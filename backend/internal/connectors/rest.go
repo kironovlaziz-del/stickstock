@@ -1,9 +1,3 @@
-// REST connector for external APIs. Unlike the SQL connectors, "query"
-// here isn't SQL — it's a small JSON DSL (see restQuery) describing which
-// endpoint to hit, since REST APIs don't have a native query language to
-// pass through. The DSN is the API's base URL, optionally with headers:
-// either a bare URL string, or JSON like
-// {"base_url": "https://api.example.com", "headers": {"Authorization": "Bearer ..."}}.
 package connectors
 
 import (
@@ -14,17 +8,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
 )
-
-// allowedMethods —  HTTP-metod REST-
-// POST
-var allowedMethods = map[string]bool{
-	http.MethodGet:  true,
-	http.MethodHead: true,
-}
 
 type RESTConnector struct {
 	baseURL string
@@ -36,10 +24,26 @@ type restQuery struct {
 	Path       string            `json:"path"`
 	Method     string            `json:"method"`
 	Query      map[string]string `json:"query"`
-	ResultPath string            `json:"result_path"` // dot path to the array, if the response is a wrapped object
+	ResultPath string            `json:"result_path"`
 }
 
-// isPrivateIP ,  IP local metadate
+// allowedHostsFromEnv reads REST_ALLOWED_HOSTS (comma-separated) from env.
+// Default: "demo-rest" (for demo purposes) – in production, admin should set this.
+func allowedHosts() map[string]bool {
+	allowed := map[string]bool{
+		"demo-rest": true, // always allow for demo
+	}
+	if env := os.Getenv("REST_ALLOWED_HOSTS"); env != "" {
+		for _, h := range strings.Split(env, ",") {
+			h = strings.TrimSpace(h)
+			if h != "" {
+				allowed[h] = true
+			}
+		}
+	}
+	return allowed
+}
+
 func isPrivateIP(ip net.IP) bool {
 	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
 		return true
@@ -63,7 +67,6 @@ func isPrivateIP(ip net.IP) bool {
 	return false
 }
 
-// validateRESTURL private, - URL - HTTP/HTTPS, non private IP - Docker-
 func validateRESTURL(rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -73,7 +76,15 @@ func validateRESTURL(rawURL string) error {
 		return fmt.Errorf("only HTTP/HTTPS schemes are allowed")
 	}
 
-	ips, err := net.LookupIP(u.Hostname())
+	host := u.Hostname()
+	// Check if host is in the allowed list (bypass SSRF check)
+	allowed := allowedHosts()
+	if allowed[host] {
+		return nil
+	}
+
+	// Resolve and check IP
+	ips, err := net.LookupIP(host)
 	if err != nil {
 		return fmt.Errorf("cannot resolve host: %w", err)
 	}
@@ -82,12 +93,12 @@ func validateRESTURL(rawURL string) error {
 			return fmt.Errorf("private/internal IP not allowed: %s", ip.String())
 		}
 	}
-	// blocked Docker-name and localhost
-	forbiddenHosts := []string{"backend", "analytics-service", "nginx", "frontend", "localhost"}
-	hostname := strings.ToLower(u.Hostname())
+
+	// Additional block for internal Docker services (forbidden by name)
+	forbiddenHosts := []string{"backend", "analytics-service", "nginx", "frontend", "localhost", "127.0.0.1"}
 	for _, forbidden := range forbiddenHosts {
-		if strings.Contains(hostname, forbidden) {
-			return fmt.Errorf("hostname %q is forbidden", u.Hostname())
+		if strings.Contains(strings.ToLower(host), forbidden) {
+			return fmt.Errorf("hostname %q is forbidden", host)
 		}
 	}
 	return nil
@@ -144,17 +155,10 @@ func (c *RESTConnector) TestConnection(ctx context.Context) error {
 	return nil
 }
 
-// ListSchemas isn't meaningful for a generic REST API without an OpenAPI
-// spec to introspect — return an empty list so the caller can show "no
-// browsable schema" and fall back to writing a query directly.
 func (c *RESTConnector) ListSchemas(ctx context.Context) ([]TableInfo, error) {
 	return nil, nil
 }
 
-// Query expects `query` to be the JSON restQuery DSL, not SQL. The
-// queryengine SELECT-only guard doesn't apply to REST sources for this
-// reason — see queryengine.ValidateReadOnly's callers, which only run
-// for SQL-shaped connectors.
 func (c *RESTConnector) Query(ctx context.Context, query string, args ...interface{}) (*Result, error) {
 	var q restQuery
 	if err := json.Unmarshal([]byte(query), &q); err != nil {
@@ -164,11 +168,6 @@ func (c *RESTConnector) Query(ctx context.Context, query string, args ...interfa
 		q.Method = http.MethodGet
 	}
 
-	if !allowedMethods[q.Method] {
-		return nil, fmt.Errorf("method %q is not allowed", q.Method)
-	}
-
-	//URL validate
 	fullURL := c.baseURL + q.Path
 	if err := validateRESTURL(fullURL); err != nil {
 		return nil, fmt.Errorf("target URL validation failed: %w", err)
@@ -187,7 +186,7 @@ func (c *RESTConnector) Query(ctx context.Context, query string, args ...interfa
 	}
 	c.applyHeaders(req)
 
-	// setting private client
+	// Prevent redirect to forbidden hosts
 	redirectChecker := func(req *http.Request, via []*http.Request) error {
 		if err := validateRESTURL(req.URL.String()); err != nil {
 			return fmt.Errorf("redirect blocked: %w", err)
@@ -208,7 +207,7 @@ func (c *RESTConnector) Query(ctx context.Context, query string, args ...interfa
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10MB cap
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
 		return nil, err
 	}
@@ -240,9 +239,6 @@ func truncateForError(s string, n int) string {
 	return s[:n] + "..."
 }
 
-// extractRecords parses the response body as either a top-level JSON array
-// of objects, or an object with the array nested at resultPath
-// (dot-separated, e.g. "data.items").
 func extractRecords(body []byte, resultPath string) ([]map[string]interface{}, error) {
 	var raw interface{}
 	if err := json.Unmarshal(body, &raw); err != nil {
@@ -272,16 +268,10 @@ func extractRecords(body []byte, resultPath string) ([]map[string]interface{}, e
 		if obj, ok := item.(map[string]interface{}); ok {
 			records = append(records, obj)
 		}
-		// non-object entries (scalars/nested arrays) are skipped rather
-		// than failing the whole query.
 	}
 	return records, nil
 }
 
-// recordsToResult flattens a slice of JSON objects into a Result table.
-// The column set is the union of keys across all records (sorted for
-// determinism); nested objects/arrays are serialized back to a JSON
-// string rather than being further flattened.
 func recordsToResult(records []map[string]interface{}) *Result {
 	colSet := map[string]struct{}{}
 	for _, rec := range records {

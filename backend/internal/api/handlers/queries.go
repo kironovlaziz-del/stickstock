@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"stickstock/backend/internal/api/middleware"
+	"stickstock/backend/internal/cache"
 	"stickstock/backend/internal/connectors"
 	"stickstock/backend/internal/crypto"
 	"stickstock/backend/internal/queryengine"
@@ -17,7 +18,7 @@ import (
 
 type QueryHandler struct {
 	DB             *sql.DB
-	EncryptionKey  string // key for AES-256-GCM
+	EncryptionKey  string
 }
 
 const maxResultRows = 1000
@@ -28,39 +29,26 @@ type runResponse struct {
 	Truncated bool            `json:"truncated"`
 }
 
-// dataSourceForOwner returns enough about a data source to run a query
-// against it. fileTable is only set for kind == "file" (see
-// migrations/0002_uploads.sql) and is empty otherwise. A free function
-// (not a *QueryHandler method) so ExportHandler can share it.
-
 func dataSourceForOwner(ctx context.Context, db *sql.DB, id, ownerID, encryptionKey string) (kind, dsn, fileTable string, err error) {
-    var fileTableNull sql.NullString
-    err = db.QueryRowContext(ctx,
-        `SELECT kind, dsn, file_table FROM data_sources WHERE id = $1 AND owner_id = $2`, id, ownerID,
-    ).Scan(&kind, &dsn, &fileTableNull)
-    if err != nil {
-        return "", "", "", err
-    }
-    fileTable = fileTableNull.String
+	var fileTableNull sql.NullString
+	err = db.QueryRowContext(ctx,
+		`SELECT kind, dsn, file_table FROM data_sources WHERE id = $1 AND owner_id = $2`, id, ownerID,
+	).Scan(&kind, &dsn, &fileTableNull)
+	if err != nil {
+		return "", "", "", err
+	}
+	fileTable = fileTableNull.String
 
-    if kind != string(connectors.KindFile) && dsn != "" {
-        decrypted, err := crypto.Decrypt(encryptionKey, dsn)
-        if err != nil {
-
-            log.Printf("WARNING: Decrypt error for id %s: %v — using plaintext DSN", id, err)
-        } else {
-            dsn = decrypted
-        }
-    }
-    return
+	if kind != string(connectors.KindFile) && dsn != "" {
+		decrypted, err := crypto.Decrypt(encryptionKey, dsn)
+		if err != nil {
+			return "", "", "", fmt.Errorf("failed to decrypt DSN for data source %s: %w", id, err)
+		}
+		dsn = decrypted
+	}
+	return
 }
 
-// validateQueryText applies the right safety check for the data source's
-// kind. SQL sources (Postgres/MySQL/file-uploads-as-tables) get the
-// SELECT-only guard; "file" sources get an additional check that the
-// query can't reach outside its own uploads-schema table. MongoDB/REST's
-// "query" is a JSON DSL, not SQL — queryengine's SQL guard doesn't apply
-// to them, so they just need to actually be valid JSON.
 func validateQueryText(kind, fileTable, text string) error {
 	if connectors.IsSQLKind(kind) {
 		if err := queryengine.ValidateReadOnly(text); err != nil {
@@ -79,8 +67,6 @@ func validateQueryText(kind, fileTable, text string) error {
 	return nil
 }
 
-// execute binds params (SQL sources only — see queryengine.BindParams)
-// and runs the query through whichever Connector matches kind.
 func execute(ctx context.Context, kind, dsn, queryText string, params map[string]interface{}) (*runResponse, error) {
 	boundQuery := queryText
 	var args []interface{}
@@ -92,9 +78,6 @@ func execute(ctx context.Context, kind, dsn, queryText string, params map[string
 		}
 		boundQuery, args = bound, boundArgs
 	}
-	// REST queries are a fixed JSON document — params aren't substituted
-	// into them yet (a future iteration could add {{param}} templating to
-	// the JSON DSL if a use case needs it).
 
 	conn, err := connectors.New(kind, dsn)
 	if err != nil {
@@ -114,8 +97,6 @@ func execute(ctx context.Context, kind, dsn, queryText string, params map[string
 	}
 	return resp, nil
 }
-
-// --- Ad-hoc execution (unsaved query, e.g. from the editor) ---
 
 type runAdHocRequest struct {
 	DataSourceID string                 `json:"data_source_id"`
@@ -151,8 +132,6 @@ func (h *QueryHandler) RunAdHoc(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
-
-// --- Saved query CRUD + versioning ---
 
 type savedQueryResponse struct {
 	ID           string     `json:"id"`
@@ -295,9 +274,6 @@ type updateSavedQueryRequest struct {
 	SQLText string `json:"sql_text"`
 }
 
-// Update writes a new version rather than overwriting sql_text in place,
-// preserving the prior text in saved_query_versions (the "Git-like
-// history" requirement).
 func (h *QueryHandler) Update(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
 	id := r.PathValue("id")
@@ -373,6 +349,9 @@ func (h *QueryHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ── Delete cache after update ──────────────────────────────
+	_ = cache.New(h.DB).Delete(r.Context(), "query:"+id)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"id": id, "version": newVersion})
 }
@@ -380,6 +359,9 @@ func (h *QueryHandler) Update(w http.ResponseWriter, r *http.Request) {
 func (h *QueryHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
 	id := r.PathValue("id")
+
+	// Delete cache
+	_ = cache.New(h.DB).Delete(r.Context(), "query:"+id)
 
 	res, err := h.DB.ExecContext(r.Context(),
 		`DELETE FROM saved_queries WHERE id = $1 AND owner_id = $2`, id, userID)
@@ -438,11 +420,6 @@ type runSavedRequest struct {
 	Params map[string]interface{} `json:"params"`
 }
 
-// callerCanViewSavedQuery reports whether userID has at least viewer
-// access to some dashboard that uses savedQueryID via a widget — this is
-// what lets a shared dashboard's collaborators (who don't own the
-// underlying saved query) still see the widget's live data when viewing
-// that dashboard.
 func callerCanViewSavedQuery(ctx context.Context, db *sql.DB, savedQueryID, userID string) (bool, error) {
 	var exists bool
 	err := db.QueryRowContext(ctx, `
@@ -467,7 +444,19 @@ func (h *QueryHandler) RunSaved(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
 	var req runSavedRequest
-	_ = json.NewDecoder(r.Body).Decode(&req) // params are optional if the query takes none
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	// ── Cache check ──────────────────────────────────────────────────
+	cacheKey := "query:" + id
+	cacheStore := cache.New(h.DB)
+	var cachedResp runResponse
+	found, err := cacheStore.Get(r.Context(), cacheKey, &cachedResp)
+	if err == nil && found {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Cache", "HIT")
+		json.NewEncoder(w).Encode(cachedResp)
+		return
+	}
 
 	var dataSourceID, sqlText, queryOwnerID string
 	if err := h.DB.QueryRowContext(r.Context(),
@@ -491,17 +480,15 @@ func (h *QueryHandler) RunSaved(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Saved queries were already validated at creation/update time — no
-	// need to re-run validateQueryText on every execution.
 	resp, err := execute(r.Context(), kind, dsn, sqlText, req.Params)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	// Freshness tracking for data-health monitoring — best-effort; a
-	// failure here shouldn't fail the request since the query itself
-	// already succeeded.
+	// ── Save to cache ──────────────────────────────────────────────
+	_ = cacheStore.Set(r.Context(), cacheKey, resp, 5*time.Minute)
+
 	if _, err := h.DB.ExecContext(r.Context(),
 		`UPDATE saved_queries SET last_run_at = now(), last_row_count = $1 WHERE id = $2`,
 		len(resp.Rows), id,
@@ -510,5 +497,6 @@ func (h *QueryHandler) RunSaved(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Cache", "MISS")
 	json.NewEncoder(w).Encode(resp)
 }

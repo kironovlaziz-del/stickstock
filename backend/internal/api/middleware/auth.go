@@ -12,29 +12,21 @@ import (
 
 const userIDCtxKey ctxKey = "user_id"
 
-// RequireAuth validates a Bearer JWT, rejects blocked users (see
-// handlers/admin.go), and injects the authenticated user's ID into the
-// request context. Routes that don't need auth (health check, public
-// share links) should not be wrapped with this.
-//
-// Handles both of Supabase's signing systems: HS256 (the legacy shared
-// secret, still the default for most projects) and ES256 (the newer JWT
-// Signing Keys system, verified via Supabase's public JWKS endpoint —
-// see https://supabase.com/docs/guides/auth/signing-keys). Which one
-// applies is read from each token's own "alg" header, so this doesn't
-// need to know in advance which system a given project is on, and keeps
-// working if a project rotates from one to the other later.
 func RequireAuth(secret, supabaseURL string, db *sql.DB) func(http.Handler) http.Handler {
 	jwks := newJWKSCache(supabaseURL)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			header := r.Header.Get("Authorization")
-			if !strings.HasPrefix(header, "Bearer ") {
-				http.Error(w, `{"error":"missing bearer token"}`, http.StatusUnauthorized)
+			tokenStr := ""
+			if c, err := r.Cookie("ss_token"); err == nil {
+				tokenStr = c.Value
+			} else if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+				tokenStr = strings.TrimPrefix(h, "Bearer ")
+			}
+			if tokenStr == "" {
+				http.Error(w, `{"error":"missing token"}`, http.StatusUnauthorized)
 				return
 			}
-			tokenStr := strings.TrimPrefix(header, "Bearer ")
 
 			token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
 				switch t.Method.Alg() {
@@ -66,18 +58,12 @@ func RequireAuth(secret, supabaseURL string, db *sql.DB) func(http.Handler) http
 				return
 			}
 
-			// Checked on every request rather than once at login, since a
-			// user blocked mid-session should lose access immediately, not
-			// just stop being able to log in again.
-			// FAIL‑CLOSED:
-
 			var isBlocked bool
 			err = db.QueryRowContext(r.Context(),
 				`SELECT is_blocked FROM profiles WHERE id = $1`, sub,
 			).Scan(&isBlocked)
 			if err != nil {
-
-				http.Error(w, `{"error":"account not found or inaccessible"}`, http.StatusForbidden)
+				http.Error(w, `{"error":"account not found"}`, http.StatusForbidden)
 				return
 			}
 			if isBlocked {
@@ -96,9 +82,6 @@ func UserIDFromContext(ctx context.Context) (string, bool) {
 	return v, ok
 }
 
-// RequireAdmin further restricts an already-RequireAuth-wrapped route to
-// callers whose profile has is_admin = true. Chain it after RequireAuth
-// so UserIDFromContext is already populated: auth(admin(handler)).
 func RequireAdmin(db *sql.DB) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

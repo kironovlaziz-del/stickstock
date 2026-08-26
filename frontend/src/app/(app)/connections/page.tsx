@@ -3,23 +3,18 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { DataSource } from "@/lib/types";
-import { useI18n } from "@/lib/i18n";
 import { SkeletonTableRow } from "@/components/Skeleton";
 
-// postgres/mysql/mongodb/rest are all wired up in the Go backend now.
-// "file" is deliberately excluded here — file sources are created via
-// upload, not this form.
 const KINDS = ["postgres", "mysql", "mongodb", "rest"];
 
 const DSN_PLACEHOLDERS: Record<string, string> = {
   postgres: "postgres://user:pass@host:5432/dbname",
   mysql: "user:pass@tcp(host:3306)/dbname",
   mongodb: "mongodb://user:pass@host:27017/dbname",
-  rest: 'https://api.example.com  (or {"base_url":"...","headers":{"Authorization":"Bearer ..."}})',
+  rest: 'http://demo-rest:80',
 };
 
 export default function ConnectionsPage() {
-  const { t } = useI18n();
   const [sources, setSources] = useState<DataSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -32,7 +27,8 @@ export default function ConnectionsPage() {
   async function load() {
     setLoading(true);
     try {
-      setSources(await api.listDataSources());
+      const data = await api.listDataSources();
+      setSources(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -53,7 +49,7 @@ export default function ConnectionsPage() {
       setName("");
       setDsn("");
       setShowForm(false);
-      await load();
+      await load(); // обновляем список после создания
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -62,11 +58,10 @@ export default function ConnectionsPage() {
   }
 
   async function handleDelete(id: string) {
-    console.log("Deleting id:", id);
     if (!confirm("Delete this connection? All related queries will become non-functional.")) return;
     try {
       await api.deleteDataSource(id);
-      await load();
+      await load(); // обновляем список после удаления
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -75,12 +70,12 @@ export default function ConnectionsPage() {
   return (
     <div className="mx-auto max-w-3xl">
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-extrabold tracking-tight">{t("nav.connections")}</h1>
+        <h1 className="text-2xl font-extrabold tracking-tight">Connections</h1>
         <button
           onClick={() => setShowForm((s) => !s)}
           className="focus-ring rounded-lg bg-accent-gradient px-4 py-2 text-sm font-semibold text-white"
         >
-          {t("connections.add")}
+          Add Connection
         </button>
       </div>
 
@@ -133,7 +128,7 @@ export default function ConnectionsPage() {
             disabled={saving}
             className="focus-ring rounded-lg bg-accent-gradient px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
           >
-            {saving ? "..." : t("connections.test")}
+            {saving ? "..." : "Save"}
           </button>
         </form>
       )}

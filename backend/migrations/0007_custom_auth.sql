@@ -1,0 +1,6 @@
+
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS email TEXT UNIQUE;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS password_hash TEXT;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS reset_token TEXT;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS reset_expires_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS profiles_email_idx ON profiles(email);
