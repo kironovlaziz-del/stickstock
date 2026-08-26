@@ -1,191 +1,166 @@
 # StickStock
 
-**Self-hosted BI platform** – connect to any data source, query and visualize data, run real statistical analysis. Backend in Go, analytics service in Python, deploy on your own VPS. No LLM, no external API keys – all analytics runs locally on Polars, DuckDB, statsmodels, and PyOD.
+**Self-hosted BI platform** – connect to any data source, query and visualize data, run advanced statistical analysis. Backend in Go, analytics in Python, deploy on your own VPS. No cloud lock-in – all data stays on your infrastructure.
 
 ---
 
-## Key Features
+## ✨ Key Features
 
-- **Self‑hosted** – full control over your data, no cloud lock‑in.
-- **Multiple data sources** – Postgres, MySQL, MongoDB, REST APIs, and CSV uploads (through isolated DuckDB).
+- **Self-hosted** – full control over your data, no external dependencies except a Postgres database.
+- **Multiple data sources** – Postgres, MySQL, MongoDB, REST APIs, and CSV uploads (via DuckDB).
 - **Visual query builder** – build SQL queries without writing code.
-- **Dashboards & widgets** – 8 chart types (bar, line, pie, scatter, table, heatmap, boxplot, treemap) with drag‑and‑drop layout.
-- **Advanced analytics** – linear regression, t‑tests, ARIMA forecasting, anomaly detection (PyOD), and aggregations (Polars).
-- **Enterprise‑grade security** – JWT (HS256/ES256) with JWKS support, read‑only SQL, encrypted credentials (AES‑256‑GCM), SSRF protection, rate limiting, and fail‑closed access control.
-- **Collaboration** – share dashboards via public links (with expiration and rate limits), add team members (editor/viewer roles), and comment on widgets.
+- **Dashboards & widgets** – 10+ chart types (bar, line, pie, scatter, table, heatmap, boxplot, treemap, KPI, forecast) with drag‑and‑drop layout.
+- **Advanced analytics** – linear regression, t‑tests, ARIMA forecasting, anomaly detection (Isolation Forest), and aggregations (Polars).
+- **Enterprise‑grade security** – JWT authentication, encrypted credentials (AES‑256‑GCM), SSRF protection, rate limiting, CSP, SQL injection protection, and audit logging.
+- **Collaboration** – share dashboards via public links (with expiration), invite team members (editor/viewer roles), and comment on widgets.
 - **Scheduled reports** – send query results via email or Telegram using cron expressions.
-- **Multi‑language** – English, Russian, Uzbek, Kazakh, Tajik.
+- **Asynchronous analytics** – heavy computations run in the background, results are fetched later.
 - **Lightweight** – runs on a 4 GB RAM / 2 CPU VPS.
 
 ---
 
-## Architecture
-┌────────────┐
-stickstock.lol ─▶ │ nginx │ (TLS termination, reverse proxy)
-└─────┬──────┘
-│ /api, /ws
-┌─────▼──────┐ ┌────────────────────┐
-│ backend │──REST──▶ analytics-service │
-│ (Go) │ │ (Python) │
-└─────┬──────┘ └────────────────────┘
-│ Polars · DuckDB ·
-│ DATABASE_URL statsmodels · PyOD
-│ (Postgres wire (all local, no API keys)
-│ protocol, TLS)
-┌─────▼──────┐
-│ Supabase │ managed Postgres + Auth (Google/GitHub/
-│ (external) │ email OAuth), not a container on the VPS
-└────────────┘
+## 🏗 Architecture
+stickstock.lol ──▶ nginx (TLS termination, reverse proxy)
+│
+├── /api, /ws ──▶ Go backend (REST API, connectors, query engine)
+│ │
+│ └── REST ──▶ Python analytics service (FastAPI, Polars, DuckDB, statsmodels, PyOD)
+│
+└── / ──▶ Next.js frontend (React, Tailwind, Recharts)
 
-- **backend/** – Go API, connectors, query engine, cache (Postgres table), dashboard/widget CRUD, authentication (JWT from Supabase).
-- **analytics-service/** – Python/FastAPI with Polars, DuckDB, statsmodels, scipy, PyOD for heavier data processing.
+
+- **backend/** – Go API, connectors, query engine, caching, dashboard/widget CRUD, authentication, audit.
+- **analytics-service/** – Python/FastAPI with Polars, DuckDB, statsmodels, scipy, PyOD.
 - **frontend/** – Next.js application (React, Tailwind, Recharts, react‑grid‑layout).
-- **nginx/** – reverse proxy with SSL termination.
+- **nginx/** – reverse proxy with SSL termination and rate limiting.
 
 ---
 
-## Security Hardening (what we fixed)
-
-We have performed a thorough security audit and implemented the following:
-
-- **CSV isolation** – uploaded CSV files are stored outside Postgres and queried via an isolated DuckDB instance (no access to internal tables).
-- **Encrypted credentials** – all data source DSNs are encrypted at rest using AES‑256‑GCM (key from environment).
-- **SSRF protection** – REST connector validates target URLs, blocks private IP ranges and internal Docker hostnames, and restricts HTTP methods (GET/HEAD only).
-- **Read‑only SQL** – only SELECT statements are allowed; writes are blocked at the query engine level.
-- **Fail‑closed authentication** – if a user profile is missing or blocked, access is denied (no fallback to open).
-- **Rate limiting** – public dashboard endpoints have per‑IP/per‑token rate limits (10 requests/minute) and link expiration (30 days).
-- **Worker locking** – scheduled reports use `SELECT ... FOR UPDATE SKIP LOCKED` to prevent duplicate executions.
-- **RLS tightened** – direct `UPDATE`/`INSERT`/`DELETE` on critical tables are revoked from `authenticated` role; all writes go through Go API.
-- **Secure logging** – decryption errors are logged, but no sensitive data is exposed.
-
----
-
-## Technology Stack
+## 🔧 Technology Stack
 
 | Component | Language / Libraries |
 |-----------|----------------------|
-| Backend   | Go 1.22, `pgx`, `jwt-go`, `crypto/aes`, `net` |
+| Backend   | Go 1.22, `pgx`, `jwt-go`, `crypto/aes`, `cron` |
 | Analytics | Python 3.11, FastAPI, Polars, DuckDB, statsmodels, PyOD, scipy |
 | Frontend  | Next.js 14, React, Tailwind, Recharts, react-grid-layout |
-| Database  | PostgreSQL (via Supabase), with a `cache` table instead of Redis |
-| Auth      | Supabase Auth (JWT with HS256/ES256, JWKS support) |
+| Database  | PostgreSQL (Supabase or local), with cache table |
+| Auth      | Custom JWT (username/password, bcrypt) |
 | Deployment| Docker, Docker Compose, nginx, Let's Encrypt |
 
 ---
 
-## Quick Start (Local Development)
+## 📦 Installation
 
-1. Clone the repository and copy environment variables:
+### Prerequisites
+
+- Linux VPS (Ubuntu 22.04 recommended)
+- Docker and Docker Compose installed
+- Domain name (optional, for HTTPS)
+- Postgres database (Supabase free tier works)
+
+### Steps
+
+1. Clone the repository:
    ```bash
-   cp .env.example .env
+   git clone https://github.com/your-username/stickstock.git
+   cd stickstock
+   2.Configure environment: cp .env.example .env
+nano .env
+Fill in:
 
-2.  Fill in DATABASE_URL, JWT_SECRET, SUPABASE_URL, SUPABASE_ANON_KEY from your Supabase project.
-3. Generate an encryption key for DSN encryption:
-openssl rand -base64 32
-and add it to .env as ENCRYPTION_KEY.
-4. Build and start the stack:
-docker compose up -d --build
+    DATABASE_URL – your Postgres connection string.
 
-5. Access http://localhost (or your domain if configured).
-Note: The frontend uses build‑time NEXT_PUBLIC_* variables – you need to rebuild the frontend container if these change.
+    JWT_SECRET – generate with openssl rand -base64 32.
 
-Deploy on a VPS (Production)
+    ENCRYPTION_KEY – generate with openssl rand -base64 32.
 
-Detailed deployment instructions are in the original README, but the key steps are:
+    APP_URL – your public URL (e.g., https://stickstock.lol).
 
-    1.Point your domain to the VPS IP.
+3.Run database migrations (SQL files in backend/migrations/) in your Postgres database.
 
-    2.Install Docker and Docker Compose.
+4.Build and start containers: docker compose build
+docker compose up -d
 
-    3.Clone the repo, set up .env with your Supabase credentials and ENCRYPTION_KEY.
-
-    4.Run the database migrations in your Supabase SQL editor.
-
-    5.Build and start: docker compose up -d --build
-
-6. Obtain SSL certificates via Let's Encrypt (standalone mode):
-    docker compose stop nginx
-docker run --rm -p 80:80 -p 443:443 \
-  -v /etc/letsencrypt:/etc/letsencrypt \
-  certbot/certbot certonly --standalone \
-  -d yourdomain.com -d www.yourdomain.com \
-  --email your@email.com --agree-tos
+5.(Optional) Configure SSL with Let's Encrypt:
+docker compose stop nginx
+certbot certonly --standalone -d yourdomain.com -d www.yourdomain.com
 docker compose up -d nginx
 
-7. Set up a cron job to auto‑renew certificates.
+6.Access the platform at https://yourdomain.com.
 
-Using StickStock
+👤 Usage
 
-    1.Sign up / login – email/password or Google/GitHub OAuth.
+    Sign up – create an account with username and password.
 
-    2.Add a data source – go to Connections and enter the DSN (Postgres, MySQL, MongoDB, or REST). Test the connection before saving.
+    Add connections – go to Connections, add your data sources (Postgres, MySQL, MongoDB, REST).
 
-    3.Run queries – use the visual query builder or write raw SQL/JSON. Saved queries can be reused in dashboards.
+    Run queries – use the SQL editor or visual query builder.
 
-    4.Create dashboards – add widgets, choose chart types, and arrange them.
+    Create dashboards – add widgets, choose chart types, arrange them.
 
-    5.Share dashboards – generate a public link with an expiration date; the link can be rate‑limited.
+    Share – generate public links for dashboards.
 
-    6.Schedule reports – set up cron expressions to send query results via email or Telegram.
+    Schedule reports – set up cron jobs to receive query results by email or Telegram.
 
-    7.Admin panel – manage users, block/unblock, grant admin rights.
+    Admin panel – manage users, view audit logs, see system stats.
 
+    📘 Documentation
 
-Key Endpoints (API)
+Full documentation is available in the docs/ folder:
 
-Endpoint	                                                                Description
+    Installation Guide
 
-GET /api/health	                                                          Health check.
-GET /api/me	                                                              Current user profile.
-CRUD /api/datasources	                                                    Data source management.
-POST /api/queries/run	                                                    Execute ad‑hoc query.
-CRUD /api/queries	                                                        Saved queries with versioning.
-CRUD /api/dashboards	                                                    Dashboards with widgets.
-POST /api/dashboards/{id}/share	                                          Generate public share link.
-GET /api/public/dashboards/{token}	                                      Public dashboard view.
-POST /api/admin/users	                                                    Admin user management.
-POST /api/reports	                                                        Scheduled reports.
+    User Guide
 
-Full OpenAPI documentation will be generated after we integrate swaggo/swag.
+    API Reference
 
-## Backup
+    🔐 Security
 
-- **Postgres**: run `./scripts/backup_all.sh` (requires `pg_dump`).
-- **MySQL**: install `mysqldump` and the script will work.
-- **MongoDB**: install `mongodump` and the script will work.
-- **REST/File**: backup the data files manually (CSV, JSON).
+    Authentication: JWT with HS256, stored in localStorage (can be moved to HttpOnly cookies if desired).
 
-For Supabase, you can also enable automated backups in the Supabase dashboard.
+    Credentials: All DSNs are encrypted with AES‑256‑GCM.
 
+    SQL Injection: Parameterized queries and read‑only validation.
 
-## Testing
+    SSRF: REST connector validates target URLs and blocks private IPs.
 
-Run all backend tests:
+    Rate Limiting: Login/register endpoints are limited to 5 requests per minute per IP.
 
-```bash
+    CSP: Strict Content‑Security‑Policy with strict-dynamic.
+
+    Audit Logging: All user actions are logged in audit_log table.
+
+    🧪 Testing
+
+Run backend tests:
 docker run --rm -v $(pwd)/backend:/app -w /app golang:1.22 go test -v ./...
 
-Or run specific package:
-docker run --rm -v $(pwd)/backend:/app -w /app golang:1.22 go test -v ./internal/analytics
+🗄️ Backup
+
+A universal backup script is provided in scripts/backup_all.sh. It detects the database type from DATABASE_URL and creates a compressed dump. Supports Postgres, MySQL, and MongoDB.
+
+./scripts/backup_all.sh
+
+Backups are stored in backups/ and rotated automatically (keep 7 days).
 
 
-Future Roadmap
+ Roadmap
 
-    Semantic layer – define reusable datasets, metrics, and dimensions.
+    Semantic layer (reusable datasets and metrics).
 
-    Full integration of analytics‑service (ARIMA, regression, anomaly detection) into the frontend.
+    Full integration of analytics into dashboards.
 
-    Batch dashboard loading – one request instead of N widget queries.
+    Batch dashboard loading (one request instead of N).
 
-    Export improvements – streaming export without the 1000‑row limit.
+    Streaming export without row limits.
 
+    OIDC/LDAP authentication.
 
+    📄 License
 
-License
 Commercial license – contact the author for purchase.
 
-
-Contact
+📬 Contact
 
     Project URL: https://stickstock.lol
 
@@ -193,6 +168,6 @@ Contact
 
     GitHub: https://github.com/kironovlaziz-del/stickstock
 
+    
 
-© 2026 StickStock. All rights reserved.
-
+    © 2026 StickStock. All rights reserved.
