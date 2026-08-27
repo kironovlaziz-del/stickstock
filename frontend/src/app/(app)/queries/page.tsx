@@ -4,10 +4,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import type { DataSource, SavedQuery, QueryResult } from "@/lib/types";
-import { useI18n } from "@/lib/i18n";
 
 export default function QueriesPage() {
-  const { t } = useI18n();
   const [queries, setQueries] = useState<SavedQuery[]>([]);
   const [sources, setSources] = useState<DataSource[]>([]);
   const [dataSourceId, setDataSourceId] = useState("");
@@ -16,6 +14,12 @@ export default function QueriesPage() {
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [saveName, setSaveName] = useState("");
+
+  // Пагинация
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 20;
+  const totalPages = result ? Math.ceil(result.rows.length / pageSize) : 0;
+  const paginatedRows = result ? result.rows.slice((currentPage - 1) * pageSize, currentPage * pageSize) : [];
 
   useEffect(() => {
     api.listQueries().then(setQueries).catch(() => {});
@@ -36,7 +40,9 @@ export default function QueriesPage() {
     setRunning(true);
     setError(null);
     try {
-      setResult(await api.runAdHoc({ data_source_id: dataSourceId, sql }));
+      const res = await api.runAdHoc({ data_source_id: dataSourceId, sql });
+      setResult(res);
+      setCurrentPage(1); // сброс на первую страницу
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -65,9 +71,7 @@ export default function QueriesPage() {
           ✨ Visual query builder
         </Link>
 
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
-          {t("nav.queries")}
-        </h2>
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Queries</h2>
         <div className="space-y-1">
           {queries.map((q) => (
             <Link
@@ -101,7 +105,7 @@ export default function QueriesPage() {
               disabled={running}
               className="focus-ring rounded-lg bg-accent-gradient px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
             >
-              {running ? "..." : t("query.run")}
+              {running ? "..." : "Run"}
             </button>
           </div>
 
@@ -110,21 +114,23 @@ export default function QueriesPage() {
             onChange={(e) => setSql(e.target.value)}
             rows={8}
             spellCheck={false}
+            placeholder="SELECT * FROM ..."
             className="focus-ring w-full rounded-lg border border-white/10 bg-base-900 p-3 font-mono text-sm outline-none"
           />
+          <p className="text-xs text-slate-500 mt-1">Write your SQL query. Use :param for parameters.</p>
 
           <div className="mt-3 flex items-center gap-2">
             <input
               value={saveName}
               onChange={(e) => setSaveName(e.target.value)}
-              placeholder={t("query.new")}
+              placeholder="New query"
               className="focus-ring flex-1 rounded-lg border border-white/10 bg-base-900 px-3 py-2 text-sm outline-none"
             />
             <button
               onClick={handleSave}
               className="focus-ring rounded-lg border border-white/10 px-4 py-2 text-sm font-medium hover:bg-white/5"
             >
-              {t("query.save")}
+              Save
             </button>
           </div>
         </div>
@@ -136,29 +142,52 @@ export default function QueriesPage() {
         )}
 
         {result && (
-          <div className="glass mt-4 overflow-auto rounded-2xl p-5">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-white/10 text-slate-400">
-                  {result.columns.map((c) => (
-                    <th key={c} className="whitespace-nowrap px-3 py-2 font-medium">
-                      {c}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {result.rows.map((row, i) => (
-                  <tr key={i} className="border-b border-white/5">
-                    {row.map((cell, j) => (
-                      <td key={j} className="whitespace-nowrap px-3 py-2 text-slate-200">
-                        {String(cell ?? "")}
-                      </td>
+          <div className="glass mt-4 rounded-2xl p-5">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs text-slate-400">
+                {result.rows.length} rows · Page {currentPage} of {totalPages}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
+                  className="px-3 py-1 text-xs rounded border border-white/10 disabled:opacity-30 hover:bg-white/5"
+                >
+                  Prev
+                </button>
+                <button
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
+                  className="px-3 py-1 text-xs rounded border border-white/10 disabled:opacity-30 hover:bg-white/5"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+            <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+              <table className="w-full text-left text-sm border-collapse">
+                <thead className="sticky top-0 bg-base-900 z-10">
+                  <tr className="border-b border-white/10 text-slate-400">
+                    {result.columns.map((c) => (
+                      <th key={c} className="whitespace-nowrap px-3 py-2 font-medium border-r border-white/5 last:border-r-0">
+                        {c}
+                      </th>
                     ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {paginatedRows.map((row, i) => (
+                    <tr key={i} className="border-b border-white/5 hover:bg-white/5 transition">
+                      {row.map((cell, j) => (
+                        <td key={j} className="whitespace-nowrap px-3 py-2 text-slate-200 border-r border-white/5 last:border-r-0">
+                          {String(cell ?? "")}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             {result.truncated && (
               <p className="mt-2 text-xs text-slate-500">Results truncated to the first rows.</p>
             )}

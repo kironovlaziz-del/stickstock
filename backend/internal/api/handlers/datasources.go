@@ -17,22 +17,30 @@ type DataSourceHandler struct {
 }
 
 type createDataSourceRequest struct {
-	Name string `json:"name"`
-	Kind string `json:"kind"`
-	DSN  string `json:"dsn"`
+	Name          string `json:"name"`
+	Kind          string `json:"kind"`
+	DSN           string `json:"dsn"`
+	SSHHost       string `json:"ssh_host,omitempty"`
+	SSHPort       int    `json:"ssh_port,omitempty"`
+	SSHUser       string `json:"ssh_user,omitempty"`
+	SSHPassword   string `json:"ssh_password,omitempty"`
+	SSHPrivateKey string `json:"ssh_private_key,omitempty"`
 }
 
 type dataSourceResponse struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Kind string `json:"kind"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Kind    string `json:"kind"`
+	SSHHost string `json:"ssh_host,omitempty"`
+	SSHPort int    `json:"ssh_port,omitempty"`
+	SSHUser string `json:"ssh_user,omitempty"`
 }
 
 func (h *DataSourceHandler) List(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
 
 	rows, err := h.DB.QueryContext(r.Context(),
-		`SELECT id, name, kind FROM data_sources WHERE owner_id = $1 ORDER BY created_at DESC`, userID)
+		`SELECT id, name, kind, ssh_host, ssh_port, ssh_user FROM data_sources WHERE owner_id = $1 ORDER BY created_at DESC`, userID)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "could not list data sources")
 		return
@@ -42,7 +50,7 @@ func (h *DataSourceHandler) List(w http.ResponseWriter, r *http.Request) {
 	out := []dataSourceResponse{}
 	for rows.Next() {
 		var d dataSourceResponse
-		if err := rows.Scan(&d.ID, &d.Name, &d.Kind); err != nil {
+		if err := rows.Scan(&d.ID, &d.Name, &d.Kind, &d.SSHHost, &d.SSHPort, &d.SSHUser); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "could not read data sources")
 			return
 		}
@@ -82,7 +90,7 @@ func (h *DataSourceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := connectors.New(req.Kind, req.DSN)
+	conn, err := connectors.NewWithSSH(req.Kind, req.DSN, req.SSHHost, req.SSHPort, req.SSHUser, req.SSHPassword, req.SSHPrivateKey)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return

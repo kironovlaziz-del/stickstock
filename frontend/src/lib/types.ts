@@ -13,17 +13,19 @@ export interface DataSource {
   id: string;
   name: string;
   kind: string;
+  ssh_host?: string;
+  ssh_port?: number;
+  ssh_user?: string;
 }
 
 export interface SavedQuery {
   id: string;
   data_source_id: string;
   name: string;
-  sql_text: string;
+  sql_text?: string;
   version: number;
   last_run_at?: string;
   last_row_count?: number;
-  created_at: string;
 }
 
 export interface QueryVersion {
@@ -34,15 +36,21 @@ export interface QueryVersion {
 
 export interface QueryResult {
   columns: string[];
-  rows: (string | number | boolean | null)[][];
-  truncated?: boolean;
+  rows: unknown[][];
+  truncated: boolean;
 }
 
-export interface DashboardSummary {
-  id: string;
-  name: string;
-  created_at: string;
-}
+export type ChartType =
+  | "line"
+  | "bar"
+  | "pie"
+  | "heatmap"
+  | "table"
+  | "boxplot"
+  | "scatter"
+  | "treemap"
+  | "kpi"
+  | "forecast";
 
 export interface LayoutItem {
   i: string; // widget id
@@ -52,27 +60,20 @@ export interface LayoutItem {
   h: number;
 }
 
-export type ChartType =
-  | "line"
-  | "bar"
-  | "pie"
-  | "scatter"
-  | "table"
-  | "heatmap"
-  | "boxplot"
-  | "treemap"
-  | "kpi"
-  | "forecast";
-
 export interface Widget {
   id: string;
   dashboard_id: string;
-  saved_query_id: string;
+  saved_query_id?: string;
+  metric_id?: string;
   chart_type: ChartType;
-  config?: {
-    x_field?: string;
-    y_field?: string;
-  };
+  config: Record<string, unknown>;
+}
+
+export interface DashboardSummary {
+  id: string;
+  name: string;
+  role: DashboardRole;
+  created_at: string;
 }
 
 export interface DashboardDetail {
@@ -85,20 +86,21 @@ export interface DashboardDetail {
   widgets: Widget[];
 }
 
-export interface TableInfo {
-  schema: string;
-  name: string;
-  columns: ColumnInfo[];
-}
-
 export interface ColumnInfo {
   name: string;
   data_type: string;
   nullable: boolean;
 }
 
+export interface TableInfo {
+  schema: string;
+  name: string;
+  columns: ColumnInfo[];
+}
+
 export interface Collaborator {
   id: string;
+  user_id: string;
   email: string;
   role: "editor" | "viewer";
 }
@@ -125,27 +127,15 @@ export interface ScheduledReport {
 export interface AdminUser {
   id: string;
   email: string;
+  locale: string;
   is_admin: boolean;
   is_blocked: boolean;
   created_at: string;
 }
 
 export interface AdminStats {
-  total_users: number;
-  total_dashboards: number;
-  total_queries: number;
-  total_data_sources: number;
-}
-
-export interface Profile {
-  id: string;
-  email: string;
-  first_name?: string;
-  last_name?: string;
-  title?: string;
-  avatar_url?: string;
-  locale?: string;
-  is_admin?: boolean;
-  is_blocked?: boolean;
-  created_at: string;
+  users: number;
+  data_sources: number;
+  saved_queries: number;
+  dashboards: number;
 }

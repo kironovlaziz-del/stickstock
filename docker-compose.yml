@@ -31,6 +31,12 @@ services:
       UPLOAD_DIR: /data/uploads
     # No external API keys needed — Polars/DuckDB/statsmodels/PyOD all run
     # locally in this container.
+  semantic-layer:
+    build: ./semantic-layer
+    restart: unless-stopped
+    networks: [internal]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
   frontend:
     build:
       context: ./frontend
@@ -44,6 +50,15 @@ services:
     restart: unless-stopped
     networks: [internal]
 
+  data-profiler:
+    build: ./data-profiler
+    restart: unless-stopped
+    networks: [internal]
+
+  ssh-tunnel-service:
+    build: ./ssh-tunnel-service
+    restart: unless-stopped
+    networks: [internal]
   nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped

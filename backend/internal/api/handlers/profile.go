@@ -1,76 +1,143 @@
 package handlers
 
 import (
+	"strings"
+	"log"
+	"bytes"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
 	"stickstock/backend/internal/api/middleware"
-	"stickstock/backend/internal/i18n"
+	"stickstock/backend/internal/connectors"
 )
 
-// ProfileHandler serves the "public.profiles" row that migrations/0001_init.sql
-// auto-creates for every Supabase Auth user (via the on_auth_user_created
-// trigger). Credentials, email, and OAuth identities live in Supabase's own
-// auth.users and are never touched here — this is just the app-specific
-// bits (currently just locale).
 type ProfileHandler struct {
-	DB *sql.DB
+	DB             *sql.DB
+	EncryptionKey  string
+	ProfilerURL    string
 }
 
-type profileResponse struct {
-	ID        string    `json:"id"`
-	Locale    string    `json:"locale"`
-	IsAdmin   bool      `json:"is_admin"`
-	CreatedAt time.Time `json:"created_at"`
+type ProfileRequest struct {
+	Table     string `json:"table"`
+	SampleSize int   `json:"sample_size,omitempty"`
 }
 
-func (h *ProfileHandler) Get(w http.ResponseWriter, r *http.Request) {
+type ProfilerResponse struct {
+	Columns   []ColumnProfile `json:"columns"`
+	TotalRows int             `json:"total_rows"`
+}
+
+type ColumnProfile struct {
+	Name             string                 `json:"name"`
+	DataType         string                 `json:"data_type"`
+	NullCount        int                    `json:"null_count"`
+	NullPercentage   float64                `json:"null_percentage"`
+	UniqueCount      int                    `json:"unique_count"`
+	UniquePercentage float64                `json:"unique_percentage"`
+	Min              interface{}            `json:"min,omitempty"`
+	Max              interface{}            `json:"max,omitempty"`
+	Mean             float64                `json:"mean,omitempty"`
+	Std              float64                `json:"std,omitempty"`
+	Quantiles        map[string]float64     `json:"quantiles,omitempty"`
+	TopValues        map[string]int         `json:"top_values,omitempty"`
+}
+
+func (h *ProfileHandler) ProfileDataSource(w http.ResponseWriter, r *http.Request) {
+	log.Printf("ProfileDataSource called: id=%s", r.PathValue("id"))
 	userID, _ := middleware.UserIDFromContext(r.Context())
+	id := r.PathValue("id")
 
-	var resp profileResponse
-	err := h.DB.QueryRowContext(r.Context(),
-		`SELECT id, locale, is_admin, created_at FROM profiles WHERE id = $1`, userID,
-	).Scan(&resp.ID, &resp.Locale, &resp.IsAdmin, &resp.CreatedAt)
+	var req ProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if req.Table == "" {
+		writeJSONError(w, http.StatusBadRequest, "table is required")
+		return
+	}
+	if req.SampleSize <= 0 || req.SampleSize > 10000 {
+		req.SampleSize = 1000
+	}
+
+	kind, dsn, _, err := dataSourceForOwner(r.Context(), h.DB, id, userID, h.EncryptionKey)
 	if err != nil {
-		// A signed-in user with no profile row means the on_auth_user_created
-		// trigger didn't fire (e.g. the migration was applied after they
-		// signed up) — surface that plainly rather than a generic 404.
-		writeJSONError(w, http.StatusNotFound, "profile not found — was migrations/0001_init.sql applied after this user signed up?")
+		writeJSONError(w, http.StatusNotFound, "data source not found")
+		return
+	}
+
+	conn, err := connectors.New(kind, dsn)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	defer conn.Close()
+
+	// Проверяем, что таблица существует
+	tables, err := conn.ListSchemas(r.Context())
+	if err != nil {
+		writeJSONError(w, http.StatusBadGateway, "could not list schema: "+err.Error())
+		return
+	}
+	var found bool
+	for _, t := range tables {
+		if t.Name == req.Table {
+			found = true
+			break
+		}
+	}
+	if !found {
+		writeJSONError(w, http.StatusNotFound, "table not found in this data source")
+		return
+	}
+
+	// Выполняем запрос к таблице
+		tableName := req.Table
+	if !strings.Contains(tableName, ".") {
+		tableName = "demo." + tableName
+	}
+	query := fmt.Sprintf("SELECT * FROM %s LIMIT %d", tableName, req.SampleSize)
+	result, err := conn.Query(r.Context(), query)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "query failed: "+err.Error())
+		return
+	}
+
+	// Подготавливаем данные для профилировщика
+	profilerReq := struct {
+		Columns []string        `json:"columns"`
+		Rows    [][]interface{} `json:"rows"`
+	}{
+		Columns: result.Columns,
+		Rows:    result.Rows,
+	}
+	body, _ := json.Marshal(profilerReq)
+
+	// Вызываем data-profiler
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Post(h.ProfilerURL+"/profile", "application/json", bytes.NewReader(body))
+	if err != nil {
+		writeJSONError(w, http.StatusBadGateway, "profiler service unreachable: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp map[string]string
+		json.NewDecoder(resp.Body).Decode(&errResp)
+		writeJSONError(w, http.StatusBadGateway, "profiler error: "+errResp["error"])
+		return
+	}
+
+	var profilerResp ProfilerResponse
+	if err := json.NewDecoder(resp.Body).Decode(&profilerResp); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "invalid response from profiler")
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
-}
-
-type updateProfileRequest struct {
-	Locale string `json:"locale"`
-}
-
-func (h *ProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
-	userID, _ := middleware.UserIDFromContext(r.Context())
-
-	var req updateProfileRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Locale == "" {
-		writeJSONError(w, http.StatusBadRequest, "locale is required")
-		return
-	}
-	if !i18n.IsSupported(req.Locale) {
-		writeJSONError(w, http.StatusBadRequest, "unsupported locale")
-		return
-	}
-
-	res, err := h.DB.ExecContext(r.Context(),
-		`UPDATE profiles SET locale = $1 WHERE id = $2`, req.Locale, userID)
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "could not update profile")
-		return
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		writeJSONError(w, http.StatusNotFound, "profile not found")
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	json.NewEncoder(w).Encode(profilerResp)
 }

@@ -9,17 +9,20 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"stickstock/backend/internal/api/middleware"
-	"stickstock/backend/internal/connectors"
-	"stickstock/backend/internal/crypto"
+	"log"
 )
 
+var allowedChartTypes = map[string]bool{
+	"line": true, "bar": true, "pie": true, "scatter": true,
+	"table": true, "heatmap": true, "boxplot": true, "treemap": true,
+	"kpi": true, "forecast": true,
+}
+
 type DashboardHandler struct {
-	DB             *sql.DB
-	EncryptionKey  string
+	DB *sql.DB
 }
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -34,7 +37,8 @@ type dashboardSummary struct {
 type widgetResponse struct {
 	ID           string          `json:"id"`
 	DashboardID  string          `json:"dashboard_id"`
-	SavedQueryID string          `json:"saved_query_id"`
+	SavedQueryID string          `json:"saved_query_id,omitempty"`
+	MetricID     string          `json:"metric_id,omitempty"`
 	ChartType    string          `json:"chart_type"`
 	Config       json.RawMessage `json:"config"`
 }
@@ -48,16 +52,6 @@ type dashboardDetailResponse struct {
 	CreatedAt    time.Time        `json:"created_at"`
 	Widgets      []widgetResponse `json:"widgets"`
 }
-
-// batchDashboardResponse extends dashboardDetailResponse with widget results
-type batchDashboardResponse struct {
-	dashboardDetailResponse
-	WidgetResults map[string]*runResponse `json:"widget_results"`
-}
-
-// runResponse is defined in queries.go; we reuse it.
-
-// ── Helpers ──────────────────────────────────────────────────────
 
 func dashboardRole(ctx context.Context, db *sql.DB, dashboardID, userID string) (string, error) {
 	var ownerID string
@@ -158,7 +152,7 @@ func (h *DashboardHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *DashboardHandler) Get(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
 	id := r.PathValue("id")
-	batch := r.URL.Query().Get("batch") == "true"
+	log.Printf("GetDashboard: userID=%s, id=%s", userID, id)
 
 	role, err := dashboardRole(r.Context(), h.DB, id, userID)
 	if err != nil {
@@ -180,7 +174,7 @@ func (h *DashboardHandler) Get(w http.ResponseWriter, r *http.Request) {
 	resp.ShareEnabled = shareToken.Valid
 
 	rows, err := h.DB.QueryContext(r.Context(),
-		`SELECT id, dashboard_id, saved_query_id, chart_type, config
+		`SELECT id, dashboard_id, saved_query_id, metric_id, chart_type, config
 		 FROM dashboard_widgets WHERE dashboard_id = $1`, id)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "could not load widgets")
@@ -192,189 +186,30 @@ func (h *DashboardHandler) Get(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var wdg widgetResponse
 		var configBytes []byte
-		if err := rows.Scan(&wdg.ID, &wdg.DashboardID, &wdg.SavedQueryID, &wdg.ChartType, &configBytes); err != nil {
+		var sqID, mID sql.NullString
+		if err := rows.Scan(&wdg.ID, &wdg.DashboardID, &sqID, &mID, &wdg.ChartType, &configBytes); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "could not read widgets")
 			return
+		}
+		if sqID.Valid {
+			wdg.SavedQueryID = sqID.String
+		}
+		if mID.Valid {
+			wdg.MetricID = mID.String
 		}
 		wdg.Config = configBytes
 		widgets = append(widgets, wdg)
 	}
 	resp.Widgets = widgets
 
-	if !batch {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-		return
-	}
-
-	// ── Batch mode ──
-	if len(widgets) == 0 {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-		return
-	}
-
-	savedQueryIDs := []string{}
-	for _, w := range widgets {
-		savedQueryIDs = append(savedQueryIDs, w.SavedQueryID)
-	}
-
-	queryMap := make(map[string]struct {
-		SQLText      string
-		DataSourceID string
-		OwnerID      string
-	})
-	queryRows, err := h.DB.QueryContext(r.Context(),
-		`SELECT id, sql_text, data_source_id, owner_id FROM saved_queries WHERE id = ANY($1)`,
-		savedQueryIDs,
-	)
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "could not fetch saved queries")
-		return
-	}
-	defer queryRows.Close()
-	for queryRows.Next() {
-		var qid, sqlText, dsID, ownerID string
-		if err := queryRows.Scan(&qid, &sqlText, &dsID, &ownerID); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, "could not read saved query")
-			return
-		}
-		queryMap[qid] = struct {
-			SQLText      string
-			DataSourceID string
-			OwnerID      string
-		}{SQLText: sqlText, DataSourceID: dsID, OwnerID: ownerID}
-	}
-
-	dsIDs := []string{}
-	for _, q := range queryMap {
-		dsIDs = append(dsIDs, q.DataSourceID)
-	}
-	dsMap := make(map[string]struct {
-		Kind      string
-		DSN       string
-		FileTable string
-	})
-	if len(dsIDs) > 0 {
-		dsRows, err := h.DB.QueryContext(r.Context(),
-			`SELECT id, kind, dsn, file_table FROM data_sources WHERE id = ANY($1)`,
-			dsIDs,
-		)
-		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, "could not fetch data sources")
-			return
-		}
-		defer dsRows.Close()
-		for dsRows.Next() {
-			var did, kind, dsn, fileTable string
-			if err := dsRows.Scan(&did, &kind, &dsn, &fileTable); err != nil {
-				writeJSONError(w, http.StatusInternalServerError, "could not read data source")
-				return
-			}
-			dsMap[did] = struct {
-				Kind      string
-				DSN       string
-				FileTable string
-			}{Kind: kind, DSN: dsn, FileTable: fileTable}
-		}
-	}
-
-	type widgetJob struct {
-		WidgetID   string
-		SQLText    string
-		DataSource struct {
-			Kind      string
-			DSN       string
-			FileTable string
-			OwnerID   string
-		}
-	}
-	jobs := []widgetJob{}
-	for _, w := range widgets {
-		q, ok := queryMap[w.SavedQueryID]
-		if !ok {
-			continue
-		}
-		ds, ok := dsMap[q.DataSourceID]
-		if !ok {
-			continue
-		}
-		jobs = append(jobs, widgetJob{
-			WidgetID: w.ID,
-			SQLText:  q.SQLText,
-			DataSource: struct {
-				Kind      string
-				DSN       string
-				FileTable string
-				OwnerID   string
-			}{
-				Kind:      ds.Kind,
-				DSN:       ds.DSN,
-				FileTable: ds.FileTable,
-				OwnerID:   q.OwnerID,
-			},
-		})
-	}
-
-	var wg sync.WaitGroup
-	results := make(map[string]*runResponse)
-	var mu sync.Mutex
-
-	for _, job := range jobs {
-		wg.Add(1)
-		go func(j widgetJob) {
-			defer wg.Done()
-			res, err := h.executeWidgetQuery(r.Context(), j.DataSource.Kind, j.DataSource.DSN, j.SQLText, nil, j.DataSource.OwnerID)
-			if err != nil {
-				mu.Lock()
-				results[j.WidgetID] = nil
-				mu.Unlock()
-				return
-			}
-			mu.Lock()
-			results[j.WidgetID] = res
-			mu.Unlock()
-		}(job)
-	}
-	wg.Wait()
-
-	batchResp := batchDashboardResponse{
-		dashboardDetailResponse: resp,
-		WidgetResults:           results,
-	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(batchResp)
+	json.NewEncoder(w).Encode(resp)
 }
 
-func (h *DashboardHandler) executeWidgetQuery(ctx context.Context, kind, dsn, sqlText string, params map[string]interface{}, ownerID string) (*runResponse, error) {
-	if kind != string(connectors.KindFile) && dsn != "" {
-		decrypted, err := crypto.Decrypt(h.EncryptionKey, dsn)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt DSN: %w", err)
-		}
-		dsn = decrypted
-	}
-	if connectors.IsSQLKind(kind) {
-		conn, err := connectors.New(kind, dsn)
-		if err != nil {
-			return nil, err
-		}
-		defer conn.Close()
-		result, err := conn.Query(ctx, sqlText)
-		if err != nil {
-			return nil, err
-		}
-		resp := &runResponse{Columns: result.Columns, Rows: result.Rows}
-		if len(resp.Rows) > 1000 {
-			resp.Rows = resp.Rows[:1000]
-			resp.Truncated = true
-		}
-		return resp, nil
-	}
-	return nil, fmt.Errorf("non-SQL sources not supported in batch mode")
+type updateDashboardRequest struct {
+	Name   string          `json:"name"`
+	Layout json.RawMessage `json:"layout"`
 }
-
-// ── Update ──────────────────────────────────────────────────────
 
 func (h *DashboardHandler) Update(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
@@ -419,8 +254,6 @@ func (h *DashboardHandler) Update(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ── Delete ──────────────────────────────────────────────────────
-
 func (h *DashboardHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
 	id := r.PathValue("id")
@@ -438,11 +271,19 @@ func (h *DashboardHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ── Widgets ─────────────────────────────────────────────────────
+// ── Widgets ─────────────────────────────────────────────────────────
+
+type addWidgetRequest struct {
+	SavedQueryID string          `json:"saved_query_id"`
+	MetricID     string          `json:"metric_id"`
+	ChartType    string          `json:"chart_type"`
+	Config       json.RawMessage `json:"config"`
+}
 
 func (h *DashboardHandler) AddWidget(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
 	dashboardID := r.PathValue("id")
+	log.Printf("AddWidget: userID=%s, dashboardID=%s", userID, dashboardID)
 
 	role, err := dashboardRole(r.Context(), h.DB, dashboardID, userID)
 	if err != nil || !canEdit(role) {
@@ -451,8 +292,22 @@ func (h *DashboardHandler) AddWidget(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req addWidgetRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SavedQueryID == "" || req.ChartType == "" {
-		writeJSONError(w, http.StatusBadRequest, "saved_query_id and chart_type are required")
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("AddWidget: decode error: %v", err)
+		writeJSONError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	log.Printf("AddWidget: req=%+v", req)
+	if req.ChartType == "" {
+		writeJSONError(w, http.StatusBadRequest, "chart_type is required")
+		return
+	}
+	if req.SavedQueryID == "" && req.MetricID == "" {
+		writeJSONError(w, http.StatusBadRequest, "either saved_query_id or metric_id is required")
+		return
+	}
+	if req.SavedQueryID != "" && req.MetricID != "" {
+		writeJSONError(w, http.StatusBadRequest, "cannot provide both saved_query_id and metric_id")
 		return
 	}
 	if !allowedChartTypes[req.ChartType] {
@@ -460,14 +315,17 @@ func (h *DashboardHandler) AddWidget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var dashboardOwner, queryOwner string
+	var dashboardOwner string
 	if err := h.DB.QueryRowContext(r.Context(), `SELECT owner_id FROM dashboards WHERE id = $1`, dashboardID).Scan(&dashboardOwner); err != nil {
 		writeJSONError(w, http.StatusNotFound, "dashboard not found")
 		return
 	}
-	if err := h.DB.QueryRowContext(r.Context(), `SELECT owner_id FROM saved_queries WHERE id = $1`, req.SavedQueryID).Scan(&queryOwner); err != nil || queryOwner != dashboardOwner {
-		writeJSONError(w, http.StatusNotFound, "saved query not found")
-		return
+	if req.SavedQueryID != "" {
+		var queryOwner string
+		if err := h.DB.QueryRowContext(r.Context(), `SELECT owner_id FROM saved_queries WHERE id = $1`, req.SavedQueryID).Scan(&queryOwner); err != nil || queryOwner != dashboardOwner {
+			writeJSONError(w, http.StatusNotFound, "saved query not found")
+			return
+		}
 	}
 
 	config := req.Config
@@ -476,22 +334,43 @@ func (h *DashboardHandler) AddWidget(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var widgetID string
-	err = h.DB.QueryRowContext(r.Context(),
-		`INSERT INTO dashboard_widgets (dashboard_id, saved_query_id, chart_type, config)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
-		dashboardID, req.SavedQueryID, req.ChartType, string(config),
-	).Scan(&widgetID)
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "could not add widget")
+	var insertErr error
+	if req.SavedQueryID != "" {
+		insertErr = h.DB.QueryRowContext(r.Context(),
+			`INSERT INTO dashboard_widgets (dashboard_id, saved_query_id, chart_type, config)
+			 VALUES ($1, $2, $3, $4) RETURNING id`,
+			dashboardID, req.SavedQueryID, req.ChartType, string(config),
+		).Scan(&widgetID)
+	} else {
+		insertErr = h.DB.QueryRowContext(r.Context(),
+			`INSERT INTO dashboard_widgets (dashboard_id, metric_id, chart_type, config)
+			 VALUES ($1, $2, $3, $4) RETURNING id`,
+			dashboardID, req.MetricID, req.ChartType, string(config),
+		).Scan(&widgetID)
+	}
+	if insertErr != nil {
+		log.Printf("AddWidget: insert error: %v", insertErr)
+		writeJSONError(w, http.StatusInternalServerError, "could not add widget: "+insertErr.Error())
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(widgetResponse{
-		ID: widgetID, DashboardID: dashboardID, SavedQueryID: req.SavedQueryID,
-		ChartType: req.ChartType, Config: config,
+		ID:           widgetID,
+		DashboardID:  dashboardID,
+		SavedQueryID: req.SavedQueryID,
+		MetricID:     req.MetricID,
+		ChartType:    req.ChartType,
+		Config:       config,
 	})
+}
+
+type updateWidgetRequest struct {
+	SavedQueryID string          `json:"saved_query_id"`
+	MetricID     string          `json:"metric_id"`
+	ChartType    string          `json:"chart_type"`
+	Config       json.RawMessage `json:"config"`
 }
 
 func (h *DashboardHandler) UpdateWidget(w http.ResponseWriter, r *http.Request) {
@@ -514,6 +393,27 @@ func (h *DashboardHandler) UpdateWidget(w http.ResponseWriter, r *http.Request) 
 		writeJSONError(w, http.StatusBadRequest, "unsupported chart_type")
 		return
 	}
+	if req.SavedQueryID != "" && req.MetricID != "" {
+		writeJSONError(w, http.StatusBadRequest, "cannot provide both saved_query_id and metric_id")
+		return
+	}
+	if req.SavedQueryID == "" && req.MetricID == "" && req.ChartType == "" && len(req.Config) == 0 {
+		writeJSONError(w, http.StatusBadRequest, "nothing to update")
+		return
+	}
+
+	if req.SavedQueryID != "" {
+		var dashboardOwner string
+		if err := h.DB.QueryRowContext(r.Context(), `SELECT owner_id FROM dashboards WHERE id = $1`, dashboardID).Scan(&dashboardOwner); err != nil {
+			writeJSONError(w, http.StatusNotFound, "dashboard not found")
+			return
+		}
+		var queryOwner string
+		if err := h.DB.QueryRowContext(r.Context(), `SELECT owner_id FROM saved_queries WHERE id = $1`, req.SavedQueryID).Scan(&queryOwner); err != nil || queryOwner != dashboardOwner {
+			writeJSONError(w, http.StatusNotFound, "saved query not found")
+			return
+		}
+	}
 
 	setClauses := []string{}
 	args := []interface{}{}
@@ -528,8 +428,18 @@ func (h *DashboardHandler) UpdateWidget(w http.ResponseWriter, r *http.Request) 
 		args = append(args, string(req.Config))
 		argN++
 	}
+	if req.SavedQueryID != "" {
+		setClauses = append(setClauses, fmt.Sprintf("saved_query_id = $%d, metric_id = NULL", argN))
+		args = append(args, req.SavedQueryID)
+		argN++
+	}
+	if req.MetricID != "" {
+		setClauses = append(setClauses, fmt.Sprintf("metric_id = $%d, saved_query_id = NULL", argN))
+		args = append(args, req.MetricID)
+		argN++
+	}
 	if len(setClauses) == 0 {
-		writeJSONError(w, http.StatusBadRequest, "chart_type or config is required")
+		writeJSONError(w, http.StatusBadRequest, "nothing to update")
 		return
 	}
 	args = append(args, widgetID, dashboardID)
@@ -574,7 +484,7 @@ func (h *DashboardHandler) DeleteWidget(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ── Collaborators ───────────────────────────────────────────────
+// ── Collaborators ──────────────────────────────────────────────────
 
 type collaboratorResponse struct {
 	UserID string `json:"user_id"`
@@ -645,11 +555,11 @@ func (h *DashboardHandler) AddCollaborator(w http.ResponseWriter, r *http.Reques
 	if err := h.DB.QueryRowContext(r.Context(),
 		`SELECT id FROM auth.users WHERE email = $1`, req.Email,
 	).Scan(&collaboratorID); err != nil {
-		writeJSONError(w, http.StatusNotFound, "user not found")
+		writeJSONError(w, http.StatusNotFound, "no user found with that email — they need to have signed up first")
 		return
 	}
 	if collaboratorID == userID {
-		writeJSONError(w, http.StatusBadRequest, "cannot add yourself")
+		writeJSONError(w, http.StatusBadRequest, "you already own this dashboard")
 		return
 	}
 
@@ -685,7 +595,7 @@ func (h *DashboardHandler) RemoveCollaborator(w http.ResponseWriter, r *http.Req
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ── Sharing ─────────────────────────────────────────────────────
+// ── Sharing ──────────────────────────────────────────────────────
 
 func randomShareToken() (string, error) {
 	b := make([]byte, 24)
@@ -739,27 +649,4 @@ func (h *DashboardHandler) RevokeShareLink(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// ── Types for requests ──────────────────────────────────────────
-
-type updateDashboardRequest struct {
-	Name   string          `json:"name"`
-	Layout json.RawMessage `json:"layout"`
-}
-
-type addWidgetRequest struct {
-	SavedQueryID string          `json:"saved_query_id"`
-	ChartType    string          `json:"chart_type"`
-	Config       json.RawMessage `json:"config"`
-}
-
-type updateWidgetRequest struct {
-	ChartType string          `json:"chart_type"`
-	Config    json.RawMessage `json:"config"`
-}
-
-var allowedChartTypes = map[string]bool{
-	"line": true, "bar": true, "pie": true, "heatmap": true,
-	"table": true, "boxplot": true, "scatter": true, "treemap": true,
 }

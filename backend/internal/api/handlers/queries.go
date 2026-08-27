@@ -21,7 +21,7 @@ type QueryHandler struct {
 	EncryptionKey  string
 }
 
-const maxResultRows = 1000
+const maxResultRows = 200
 
 type runResponse struct {
 	Columns   []string        `json:"columns"`

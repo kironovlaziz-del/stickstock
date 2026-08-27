@@ -6,6 +6,8 @@ import { usePathname } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
 
 const NAV = [
+  { href: "/semantic", label: "Semantic", icon: "🧠" },
+  { href: "/lineage", label: "Lineage", icon: "🔗" },
   { href: "/dashboards", label: "Dashboards", icon: "▦" },
   { href: "/queries", label: "Queries", icon: "⌁" },
   { href: "/connections", label: "Connections", icon: "◈" },

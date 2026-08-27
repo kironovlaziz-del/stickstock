@@ -52,15 +52,18 @@ export default function ChartWidget({
     let value: number | null = null;
     if (firstRow) {
       for (const cell of firstRow) {
-        if (typeof cell === "number" && !isNaN(cell)) {
-          value = cell;
+        const num = typeof cell === "number" ? cell : parseFloat(String(cell));
+        if (!isNaN(num)) {
+          value = num;
           break;
         }
       }
     }
+    console.log("KPI result:", result);
+    console.log("KPI value:", value);
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-5xl font-bold text-white">
+      <div className="flex items-center justify-center h-full min-h-[120px] p-4 bg-base-800/30 rounded-xl border border-white/10">
+        <div className="text-5xl font-bold text-white text-center">
           {value !== null ? value.toLocaleString() : "—"}
         </div>
       </div>
@@ -174,7 +177,7 @@ export default function ChartWidget({
     );
   }
 
-  // ---------- Default: Line (also used for heatmap/boxplot/treemap fallback) ----------
+  // ---------- Default: Line ----------
   return (
     <ResponsiveContainer width="100%" height={260}>
       <LineChart data={data}>

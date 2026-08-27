@@ -25,7 +25,25 @@ export default function DashboardViewPage() {
       const d = await api.getDashboard(params.id);
       setDashboard(d);
       const entries = await Promise.all(
-        d.widgets.map(async (w) => [w.id, await api.runSaved(w.saved_query_id)] as const)
+        d.widgets.map(async (w) => {
+          let result: QueryResult;
+          if (w.metric_id) {
+            console.log("Calling runMetric for widget:", w.id, "metric_id:", w.metric_id);
+            try {
+              const resp = await api.runMetric(w.metric_id);
+              console.log("runMetric response:", resp);
+              result = { columns: ['value'], rows: [[resp.value]], truncated: false };
+            } catch (e) {
+              console.error("runMetric error:", e);
+              result = { columns: ['value'], rows: [['N/A']], truncated: false };
+            }
+          } else if (w.saved_query_id) {
+            result = await api.runSaved(w.saved_query_id);
+          } else {
+            result = { columns: [], rows: [], truncated: false };
+          }
+          return [w.id, result] as const;
+        })
       );
       setResults(Object.fromEntries(entries));
     } catch (e) {

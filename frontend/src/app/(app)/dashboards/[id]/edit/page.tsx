@@ -22,17 +22,29 @@ const CHART_TYPES: ChartType[] = [
   "forecast",
 ];
 
+interface Metric {
+  id: string;
+  name: string;
+  expression: string;
+  table: string;
+}
+
 export default function DashboardEditPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const [dashboard, setDashboard] = useState<DashboardDetail | null>(null);
   const [layout, setLayout] = useState<LayoutItem[]>([]);
   const [queries, setQueries] = useState<SavedQuery[]>([]);
+  const [metrics, setMetrics] = useState<Metric[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [savingLayout, setSavingLayout] = useState(false);
+
+  // Widget form state
   const [editingWidget, setEditingWidget] = useState<any | null>(null);
+  const [widgetType, setWidgetType] = useState<"query" | "metric">("query");
   const [widgetConfig, setWidgetConfig] = useState({
     saved_query_id: "",
+    metric_id: "",
     chart_type: "bar" as ChartType,
     x_field: "",
     y_field: "",
@@ -55,6 +67,15 @@ export default function DashboardEditPage() {
       .listQueries()
       .then((qs) => {
         setQueries(qs);
+        if (qs[0]) setWidgetConfig(prev => ({ ...prev, saved_query_id: qs[0].id }));
+      })
+      .catch(() => {});
+    // Загружаем метрики
+    api
+      .listMetrics()
+      .then((ms) => {
+        setMetrics(ms);
+        if (ms[0]) setWidgetConfig(prev => ({ ...prev, metric_id: ms[0].id }));
       })
       .catch(() => {});
   }, [load]);
@@ -73,16 +94,29 @@ export default function DashboardEditPage() {
 
   const handleSaveWidget = async () => {
     if (!editingWidget) return;
+    const payload: any = {
+      chart_type: widgetConfig.chart_type,
+      config: {
+        x_field: widgetConfig.x_field,
+        y_field: widgetConfig.y_field,
+        horizon: widgetConfig.horizon,
+      },
+    };
+    if (widgetType === "query") {
+      if (!widgetConfig.saved_query_id) {
+        setError("Please select a saved query.");
+        return;
+      }
+      payload.saved_query_id = widgetConfig.saved_query_id;
+    } else {
+      if (!widgetConfig.metric_id) {
+        setError("Please select a metric.");
+        return;
+      }
+      payload.metric_id = widgetConfig.metric_id;
+    }
+
     try {
-      const payload = {
-        saved_query_id: widgetConfig.saved_query_id,
-        chart_type: widgetConfig.chart_type,
-        config: {
-          x_field: widgetConfig.x_field,
-          y_field: widgetConfig.y_field,
-          horizon: widgetConfig.horizon,
-        },
-      };
       if (editingWidget.id) {
         await api.updateWidget(params.id, editingWidget.id, payload);
       } else {
@@ -115,9 +149,11 @@ export default function DashboardEditPage() {
           {savingLayout && <span className="text-xs text-slate-500">Saving layout...</span>}
           <button
             onClick={() => {
-              setEditingWidget({ id: null, saved_query_id: "", chart_type: "bar", config: {} });
+              setEditingWidget({ id: null, saved_query_id: "", metric_id: "", chart_type: "bar", config: {} });
+              setWidgetType("query");
               setWidgetConfig({
                 saved_query_id: queries[0]?.id || "",
+                metric_id: metrics[0]?.id || "",
                 chart_type: "bar",
                 x_field: "",
                 y_field: "",
@@ -161,14 +197,22 @@ export default function DashboardEditPage() {
               <div key={w.id} className="glass flex flex-col overflow-hidden rounded-2xl p-4 relative">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <p className="truncate text-xs font-medium text-slate-400">
-                    {queries.find((q) => q.id === w.saved_query_id)?.name || w.saved_query_id} · {w.chart_type}
+                    {w.saved_query_id
+                      ? (queries.find((q) => q.id === w.saved_query_id)?.name || w.saved_query_id)
+                      : w.metric_id
+                      ? (metrics.find((m) => m.id === w.metric_id)?.name || w.metric_id)
+                      : "Unknown"}{" "}
+                    · {w.chart_type}
                   </p>
                   <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
                     <button
                       onClick={() => {
                         setEditingWidget(w);
+                        const isMetric = !!w.metric_id;
+                        setWidgetType(isMetric ? "metric" : "query");
                         setWidgetConfig({
-                          saved_query_id: w.saved_query_id,
+                          saved_query_id: w.saved_query_id || "",
+                          metric_id: w.metric_id || "",
                           chart_type: w.chart_type,
                           x_field: (w.config as any)?.x_field || "",
                           y_field: (w.config as any)?.y_field || "",
@@ -205,18 +249,56 @@ export default function DashboardEditPage() {
             </h2>
             <div className="space-y-3">
               <div>
-                <label className="text-xs text-slate-400 block mb-1">Saved Query</label>
-                <select
-                  value={widgetConfig.saved_query_id}
-                  onChange={(e) => setWidgetConfig({...widgetConfig, saved_query_id: e.target.value})}
-                  className="w-full p-2 border border-white/10 rounded bg-base-800 text-white text-sm"
-                >
-                  <option value="">Select a query</option>
-                  {queries.map((q) => (
-                    <option key={q.id} value={q.id}>{q.name}</option>
-                  ))}
-                </select>
+                <label className="text-xs text-slate-400 block mb-1">Data Source</label>
+                <div className="flex gap-2">
+                  <button
+                    className={`flex-1 px-3 py-1 text-sm rounded border ${widgetType === "query" ? "border-accent-blue bg-accent-blue/20 text-white" : "border-white/10 text-slate-400"}`}
+                    onClick={() => setWidgetType("query")}
+                  >
+                    Saved Query
+                  </button>
+                  <button
+                    className={`flex-1 px-3 py-1 text-sm rounded border ${widgetType === "metric" ? "border-accent-blue bg-accent-blue/20 text-white" : "border-white/10 text-slate-400"}`}
+                    onClick={() => setWidgetType("metric")}
+                  >
+                    Metric
+                  </button>
+                </div>
               </div>
+
+              {widgetType === "query" ? (
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Saved Query</label>
+                  <select
+                    value={widgetConfig.saved_query_id}
+                    onChange={(e) => setWidgetConfig({...widgetConfig, saved_query_id: e.target.value})}
+                    className="w-full p-2 border border-white/10 rounded bg-base-800 text-white text-sm"
+                  >
+                    <option value="">Select a query</option>
+                    {queries.map((q) => (
+                      <option key={q.id} value={q.id}>{q.name}</option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Metric</label>
+                  <select
+                    value={widgetConfig.metric_id}
+                    onChange={(e) => setWidgetConfig({...widgetConfig, metric_id: e.target.value})}
+                    className="w-full p-2 border border-white/10 rounded bg-base-800 text-white text-sm"
+                  >
+                    <option value="">Select a metric</option>
+                    {metrics.map((m) => (
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    ))}
+                  </select>
+                  {metrics.length === 0 && (
+                    <p className="text-xs text-slate-500 mt-1">No metrics found. Create one in the Semantic Layer.</p>
+                  )}
+                </div>
+              )}
+
               <div>
                 <label className="text-xs text-slate-400 block mb-1">Chart Type</label>
                 <select

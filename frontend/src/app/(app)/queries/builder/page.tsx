@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import type { DataSource, TableInfo, QueryResult } from "@/lib/types";
-import { useI18n } from "@/lib/i18n";
 
 interface FilterRow {
   column: string;
@@ -21,11 +20,6 @@ interface AggRow {
 const OPS = ["=", "!=", ">", ">=", "<", "<=", "LIKE"];
 const FUNCS = ["SUM", "AVG", "COUNT", "MIN", "MAX"];
 
-// buildSQL never inlines filter *values* into the SQL text — those go out
-// as named :params and ride the same queryengine.BindParams machinery the
-// hand-written SQL editor already uses. Column/table names do get
-// inlined, but only ones the user picked from dropdowns populated by the
-// schema endpoint, not free-typed text.
 function buildSQL(
   table: string,
   columns: string[],
@@ -76,7 +70,6 @@ function buildSQL(
 }
 
 export default function QueryBuilderPage() {
-  const { t } = useI18n();
   const [sources, setSources] = useState<DataSource[]>([]);
   const [dataSourceId, setDataSourceId] = useState("");
   const [tables, setTables] = useState<TableInfo[]>([]);
@@ -93,6 +86,12 @@ export default function QueryBuilderPage() {
   const [loadingSchema, setLoadingSchema] = useState(false);
   const [running, setRunning] = useState(false);
   const [saveName, setSaveName] = useState("");
+
+  // Пагинация
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 20;
+  const totalPages = result ? Math.ceil(result.rows.length / pageSize) : 0;
+  const paginatedRows = result ? result.rows.slice((currentPage - 1) * pageSize, currentPage * pageSize) : [];
 
   useEffect(() => {
     api
@@ -150,10 +149,16 @@ export default function QueryBuilderPage() {
       setError("Pick a table first.");
       return;
     }
+    if (!dataSourceId) {
+      setError("Pick a data source.");
+      return;
+    }
     setRunning(true);
     setError(null);
     try {
-      setResult(await api.runAdHoc({ data_source_id: dataSourceId, sql, params }));
+      const response = await api.runAdHoc({ data_source_id: dataSourceId, sql, params });
+      setResult(response);
+      setCurrentPage(1);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -161,11 +166,6 @@ export default function QueryBuilderPage() {
     }
   }
 
-  // buildStandaloneSQL inlines filter values as quoted literals (single
-  // quotes escaped) instead of :params, so a saved query runs correctly
-  // on its own later without needing the builder's param map supplied
-  // again — saved queries don't have anywhere to persist a default param
-  // map yet (see README roadmap: parameter schema UI).
   function buildStandaloneSQL(): string {
     const validFilters = filters.filter((f) => f.column && f.value !== "");
     const selectParts: string[] = [];
@@ -213,7 +213,7 @@ export default function QueryBuilderPage() {
           href="/queries"
           className="focus-ring rounded-lg border border-white/10 px-4 py-2 text-sm font-medium hover:bg-white/5"
         >
-          Back to {t("nav.queries")}
+          Back to Queries
         </Link>
       </div>
 
@@ -245,7 +245,7 @@ export default function QueryBuilderPage() {
               disabled={loadingSchema}
               className="focus-ring w-full rounded-lg border border-white/10 bg-base-900 px-3 py-2 text-sm outline-none"
             >
-              <option value="">{loadingSchema ? t("common.loading") : "Select a table..."}</option>
+              <option value="">{loadingSchema ? "Loading..." : "Select a table..."}</option>
               {tables.map((tb) => (
                 <option key={`${tb.schema}.${tb.name}`} value={tb.name}>
                   {tb.schema && tb.schema !== "public" ? `${tb.schema}.${tb.name}` : tb.name}
@@ -462,19 +462,19 @@ export default function QueryBuilderPage() {
                 disabled={running}
                 className="focus-ring rounded-lg bg-accent-gradient px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
               >
-                {running ? "..." : t("query.run")}
+                {running ? "..." : "Run"}
               </button>
               <input
                 value={saveName}
                 onChange={(e) => setSaveName(e.target.value)}
-                placeholder={t("query.new")}
+                placeholder="New query"
                 className="focus-ring flex-1 rounded-lg border border-white/10 bg-base-900 px-3 py-2 text-sm outline-none"
               />
               <button
                 onClick={handleSave}
                 className="focus-ring rounded-lg border border-white/10 px-4 py-2 text-sm font-medium hover:bg-white/5"
               >
-                {t("query.save")}
+                Save
               </button>
             </div>
           </div>
@@ -486,29 +486,55 @@ export default function QueryBuilderPage() {
       )}
 
       {result && (
-        <div className="glass overflow-auto rounded-2xl p-5">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-white/10 text-slate-400">
-                {result.columns.map((c) => (
-                  <th key={c} className="whitespace-nowrap px-3 py-2 font-medium">
-                    {c}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {result.rows.map((row, i) => (
-                <tr key={i} className="border-b border-white/5">
-                  {row.map((cell, j) => (
-                    <td key={j} className="whitespace-nowrap px-3 py-2 text-slate-200">
-                      {String(cell ?? "")}
-                    </td>
+        <div className="glass rounded-2xl p-5">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-xs text-slate-400">
+              {result.rows.length} rows · Page {currentPage} of {totalPages}
+            </span>
+            <div className="flex gap-2">
+              <button
+                disabled={currentPage <= 1}
+                onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
+                className="px-3 py-1 text-xs rounded border border-white/10 disabled:opacity-30 hover:bg-white/5"
+              >
+                Prev
+              </button>
+              <button
+                disabled={currentPage >= totalPages}
+                onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
+                className="px-3 py-1 text-xs rounded border border-white/10 disabled:opacity-30 hover:bg-white/5"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+          <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+            <table className="w-full text-left text-sm border-collapse">
+              <thead className="sticky top-0 bg-base-900 z-10">
+                <tr className="border-b border-white/10 text-slate-400">
+                  {result.columns.map((c) => (
+                    <th key={c} className="whitespace-nowrap px-3 py-2 font-medium border-r border-white/5 last:border-r-0">
+                      {c}
+                    </th>
                   ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {paginatedRows.map((row, i) => (
+                  <tr key={i} className="border-b border-white/5 hover:bg-white/5 transition">
+                    {row.map((cell, j) => (
+                      <td key={j} className="whitespace-nowrap px-3 py-2 text-slate-200 border-r border-white/5 last:border-r-0">
+                        {String(cell ?? "")}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {result.truncated && (
+            <p className="mt-2 text-xs text-slate-500">Results truncated to the first rows.</p>
+          )}
         </div>
       )}
     </div>

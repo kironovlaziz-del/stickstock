@@ -12,33 +12,28 @@ type LineageHandler struct {
 	DB *sql.DB
 }
 
-type lineageNode struct {
+type LineageNode struct {
 	ID   string `json:"id"`
-	Type string `json:"type"` // "data_source" | "saved_query" | "dashboard"
+	Type string `json:"type"` // data_source, saved_query, dashboard
 	Name string `json:"name"`
 }
 
-type lineageEdge struct {
+type LineageEdge struct {
 	From string `json:"from"`
 	To   string `json:"to"`
 }
 
-type lineageGraph struct {
-	Nodes []lineageNode `json:"nodes"`
-	Edges []lineageEdge `json:"edges"`
+type LineageGraph struct {
+	Nodes []LineageNode `json:"nodes"`
+	Edges []LineageEdge `json:"edges"`
 }
 
-// Get builds the caller's full lineage graph: which data source feeds
-// which saved query, and which dashboards use that query via a widget —
-// "where did this number come from" (see spec section on data lineage).
-// This deliberately doesn't need its own tracking tables: the answer is
-// already fully captured by existing foreign keys, so it's just three
-// queries and some ID-prefixing to keep node IDs unique across types.
-// GET /api/lineage
+// Get returns the full lineage graph for the current user.
 func (h *LineageHandler) Get(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
-	graph := lineageGraph{Nodes: []lineageNode{}, Edges: []lineageEdge{}}
+	graph := LineageGraph{Nodes: []LineageNode{}, Edges: []LineageEdge{}}
 
+	// 1. Data sources
 	dsRows, err := h.DB.QueryContext(r.Context(),
 		`SELECT id, name FROM data_sources WHERE owner_id = $1`, userID)
 	if err != nil {
@@ -49,13 +44,14 @@ func (h *LineageHandler) Get(w http.ResponseWriter, r *http.Request) {
 		var id, name string
 		if err := dsRows.Scan(&id, &name); err != nil {
 			dsRows.Close()
-			writeJSONError(w, http.StatusInternalServerError, "could not read data sources")
+			writeJSONError(w, http.StatusInternalServerError, "could not read data source")
 			return
 		}
-		graph.Nodes = append(graph.Nodes, lineageNode{ID: "ds:" + id, Type: "data_source", Name: name})
+		graph.Nodes = append(graph.Nodes, LineageNode{ID: "ds:" + id, Type: "data_source", Name: name})
 	}
 	dsRows.Close()
 
+	// 2. Saved queries
 	qRows, err := h.DB.QueryContext(r.Context(),
 		`SELECT id, name, data_source_id FROM saved_queries WHERE owner_id = $1`, userID)
 	if err != nil {
@@ -66,14 +62,15 @@ func (h *LineageHandler) Get(w http.ResponseWriter, r *http.Request) {
 		var id, name, dsID string
 		if err := qRows.Scan(&id, &name, &dsID); err != nil {
 			qRows.Close()
-			writeJSONError(w, http.StatusInternalServerError, "could not read saved queries")
+			writeJSONError(w, http.StatusInternalServerError, "could not read saved query")
 			return
 		}
-		graph.Nodes = append(graph.Nodes, lineageNode{ID: "q:" + id, Type: "saved_query", Name: name})
-		graph.Edges = append(graph.Edges, lineageEdge{From: "ds:" + dsID, To: "q:" + id})
+		graph.Nodes = append(graph.Nodes, LineageNode{ID: "q:" + id, Type: "saved_query", Name: name})
+		graph.Edges = append(graph.Edges, LineageEdge{From: "ds:" + dsID, To: "q:" + id})
 	}
 	qRows.Close()
 
+	// 3. Dashboards
 	dRows, err := h.DB.QueryContext(r.Context(),
 		`SELECT id, name FROM dashboards WHERE owner_id = $1`, userID)
 	if err != nil {
@@ -84,13 +81,14 @@ func (h *LineageHandler) Get(w http.ResponseWriter, r *http.Request) {
 		var id, name string
 		if err := dRows.Scan(&id, &name); err != nil {
 			dRows.Close()
-			writeJSONError(w, http.StatusInternalServerError, "could not read dashboards")
+			writeJSONError(w, http.StatusInternalServerError, "could not read dashboard")
 			return
 		}
-		graph.Nodes = append(graph.Nodes, lineageNode{ID: "d:" + id, Type: "dashboard", Name: name})
+		graph.Nodes = append(graph.Nodes, LineageNode{ID: "d:" + id, Type: "dashboard", Name: name})
 	}
 	dRows.Close()
 
+	// 4. Widgets -> connect queries to dashboards
 	wRows, err := h.DB.QueryContext(r.Context(), `
 		SELECT DISTINCT dw.saved_query_id, dw.dashboard_id
 		FROM dashboard_widgets dw
@@ -104,10 +102,10 @@ func (h *LineageHandler) Get(w http.ResponseWriter, r *http.Request) {
 		var qID, dID string
 		if err := wRows.Scan(&qID, &dID); err != nil {
 			wRows.Close()
-			writeJSONError(w, http.StatusInternalServerError, "could not read widget links")
+			writeJSONError(w, http.StatusInternalServerError, "could not read widget link")
 			return
 		}
-		graph.Edges = append(graph.Edges, lineageEdge{From: "q:" + qID, To: "d:" + dID})
+		graph.Edges = append(graph.Edges, LineageEdge{From: "q:" + qID, To: "d:" + dID})
 	}
 	wRows.Close()
 

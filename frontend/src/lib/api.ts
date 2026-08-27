@@ -98,7 +98,7 @@ export const api = {
     request<void>("/me", { method: "PUT", body: JSON.stringify({ locale }) }),
 
   listDataSources: () => request<DataSource[]>("/datasources"),
-  createDataSource: (body: { name: string; kind: string; dsn: string }) =>
+  createDataSource: (body: { name: string; kind: string; dsn: string; ssh_host?: string; ssh_port?: number; ssh_user?: string; ssh_password?: string; ssh_private_key?: string }) =>
     request<DataSource>("/datasources", { method: "POST", body: JSON.stringify(body) }),
   deleteDataSource: (id: string) => request<void>(`/datasources/${id}`, { method: "DELETE" }),
   getSchema: (dataSourceId: string) =>
@@ -234,4 +234,28 @@ export const api = {
   adminUpdateUser: (id: string, body: Partial<{ is_admin: boolean; is_blocked: boolean }>) =>
     request<void>(`/admin/users/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   adminStats: () => request<AdminStats>("/admin/stats"),
+  profileDataSource: (id: string, table: string, sampleSize?: number) =>
+    request<any>(`/datasources/${id}/profile`, { method: "POST", body: JSON.stringify({ table, sample_size: sampleSize || 1000 }) }),
+  lineage: () => request<any>("/lineage"),
+
+  // --- Semantic Layer ---
+  semantic: {
+    metrics: {
+      list: () => request<any[]>("/semantic/metrics"),
+      create: (body: { name: string; description?: string; expression: string; data_source_id: string; table: string }) =>
+        request<any>("/semantic/metrics", { method: "POST", body: JSON.stringify(body) }),
+      get: (id: string) => request<any>(`/semantic/metrics/${id}`),
+      delete: (id: string) => request<void>(`/semantic/metrics/${id}`, { method: "DELETE" }),
+    },
+    datasets: {
+      list: () => request<any[]>("/semantic/datasets"),
+      create: (body: { name: string; description?: string; columns: string[]; data_source_id: string; table: string; filters?: any }) =>
+        request<any>("/semantic/datasets", { method: "POST", body: JSON.stringify(body) }),
+      get: (id: string) => request<any>(`/semantic/datasets/${id}`),
+      delete: (id: string) => request<void>(`/semantic/datasets/${id}`, { method: "DELETE" }),
+    },
+  },
+
+  listMetrics: () => request<any[]>("/semantic/metrics"),
+  runMetric: (id: string) => request<any>(`/semantic/metrics/${id}/run`),
 };
