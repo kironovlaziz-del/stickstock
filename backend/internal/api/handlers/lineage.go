@@ -93,7 +93,7 @@ func (h *LineageHandler) Get(w http.ResponseWriter, r *http.Request) {
 		SELECT DISTINCT dw.saved_query_id, dw.dashboard_id
 		FROM dashboard_widgets dw
 		JOIN dashboards d ON d.id = dw.dashboard_id
-		WHERE d.owner_id = $1`, userID)
+		WHERE d.owner_id = $1 AND dw.saved_query_id IS NOT NULL`, userID)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "could not load widget links")
 		return
