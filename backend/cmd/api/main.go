@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"context"
 	"errors"
 	"log"
@@ -26,6 +27,27 @@ func main() {
 		log.Fatalf("database error: %v", err)
 	}
 	defer database.Close()
+
+	// ── Apply migrations ──────────────────────────────────────────
+	migrationFiles, err := filepath.Glob("./migrations/*.sql")
+	if err != nil {
+		log.Fatalf("could not list migration files: %v", err)
+	}
+	var statements []string
+	for _, f := range migrationFiles {
+		content, err := os.ReadFile(f)
+		if err != nil {
+			log.Fatalf("could not read migration file %s: %v", f, err)
+		}
+		statements = append(statements, string(content))
+	}
+	if len(statements) > 0 {
+		log.Printf("Applying %d migration(s)...", len(statements))
+		if err := db.RunMigrations(database, statements); err != nil {
+			log.Fatalf("migrations failed: %v", err)
+		}
+		log.Println("Migrations applied successfully")
+	}
 
 	router := api.NewRouter(cfg, database)
 

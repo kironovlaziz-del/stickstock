@@ -12,6 +12,7 @@ RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=builder /out/api /app/api
 COPY --from=builder /out/worker /app/worker
+COPY migrations /app/migrations
 COPY locales /app/locales
 EXPOSE 8080
 # api runs as the container's persistent process; worker is a one-shot

@@ -11,6 +11,6 @@ CREATE TABLE IF NOT EXISTS analytics_tasks (
     completed_at TIMESTAMPTZ
 );
 
-CREATE INDEX idx_analytics_tasks_user_id ON analytics_tasks(user_id);
-CREATE INDEX idx_analytics_tasks_status ON analytics_tasks(status);
-CREATE INDEX idx_analytics_tasks_created ON analytics_tasks(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_analytics_tasks_user_id ON analytics_tasks(user_id);
+CREATE INDEX IF NOT EXISTS idx_analytics_tasks_status ON analytics_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_analytics_tasks_created ON analytics_tasks(created_at DESC);
