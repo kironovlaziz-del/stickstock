@@ -10,24 +10,9 @@ import { mergeLayout, GRID_COLS } from "@/lib/dashboardLayout";
 const Grid = WidthProvider(GridLayout);
 
 const CHART_TYPES: ChartType[] = [
-  "line",
-  "bar",
-  "pie",
-  "scatter",
-  "table",
-  "heatmap",
-  "boxplot",
-  "treemap",
-  "kpi",
-  "forecast",
+  "line", "bar", "pie", "scatter", "table", "heatmap", "boxplot", "treemap", "kpi", "forecast",
+  "combo", "radar", "funnel", "waterfall", "bubble", "stackedbar"
 ];
-
-interface Metric {
-  id: string;
-  name: string;
-  expression: string;
-  table: string;
-}
 
 export default function DashboardEditPage() {
   const params = useParams<{ id: string }>();
@@ -35,30 +20,16 @@ export default function DashboardEditPage() {
   const [dashboard, setDashboard] = useState<DashboardDetail | null>(null);
   const [layout, setLayout] = useState<LayoutItem[]>([]);
   const [queries, setQueries] = useState<SavedQuery[]>([]);
-  const [metrics, setMetrics] = useState<Metric[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [savingLayout, setSavingLayout] = useState(false);
 
-  // Widget form state
-  const [editingWidget, setEditingWidget] = useState<any | null>(null);
-  const [widgetType, setWidgetType] = useState<"query" | "metric">("query");
-  const [widgetConfig, setWidgetConfig] = useState({
-    saved_query_id: "",
-    metric_id: "",
-    chart_type: "bar" as ChartType,
-    x_field: "",
-    y_field: "",
-    horizon: 10,
-  });
+  const [savedQueryId, setSavedQueryId] = useState("");
+  const [chartType, setChartType] = useState<ChartType>("bar");
 
   const load = useCallback(async () => {
-    try {
-      const d = await api.getDashboard(params.id);
-      setDashboard(d);
-      setLayout(mergeLayout(d.widgets, d.layout));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
+    const d = await api.getDashboard(params.id);
+    setDashboard(d);
+    setLayout(mergeLayout(d.widgets, d.layout));
   }, [params.id]);
 
   useEffect(() => {
@@ -67,15 +38,7 @@ export default function DashboardEditPage() {
       .listQueries()
       .then((qs) => {
         setQueries(qs);
-        if (qs[0]) setWidgetConfig(prev => ({ ...prev, saved_query_id: qs[0].id }));
-      })
-      .catch(() => {});
-    // Загружаем метрики
-    api
-      .listMetrics()
-      .then((ms) => {
-        setMetrics(ms);
-        if (ms[0]) setWidgetConfig(prev => ({ ...prev, metric_id: ms[0].id }));
+        if (qs[0]) setSavedQueryId(qs[0].id);
       })
       .catch(() => {});
   }, [load]);
@@ -92,52 +55,24 @@ export default function DashboardEditPage() {
     }
   }
 
-  const handleSaveWidget = async () => {
-    if (!editingWidget) return;
-    const payload: any = {
-      chart_type: widgetConfig.chart_type,
-      config: {
-        x_field: widgetConfig.x_field,
-        y_field: widgetConfig.y_field,
-        horizon: widgetConfig.horizon,
-      },
-    };
-    if (widgetType === "query") {
-      if (!widgetConfig.saved_query_id) {
-        setError("Please select a saved query.");
-        return;
-      }
-      payload.saved_query_id = widgetConfig.saved_query_id;
-    } else {
-      if (!widgetConfig.metric_id) {
-        setError("Please select a metric.");
-        return;
-      }
-      payload.metric_id = widgetConfig.metric_id;
+  async function handleAdd(e: React.FormEvent) {
+    e.preventDefault();
+    if (!savedQueryId) {
+      setError("Save a query first, then attach it here.");
+      return;
     }
-
     try {
-      if (editingWidget.id) {
-        await api.updateWidget(params.id, editingWidget.id, payload);
-      } else {
-        await api.addWidget(params.id, payload);
-      }
-      setEditingWidget(null);
+      await api.addWidget(params.id, { saved_query_id: savedQueryId, chart_type: chartType });
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  };
+  }
 
-  const handleRemoveWidget = async (widgetId: string) => {
-    if (!confirm("Delete this widget?")) return;
-    try {
-      await api.deleteWidget(params.id, widgetId);
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
+  async function handleRemove(widgetId: string) {
+    await api.deleteWidget(params.id, widgetId);
+    await load();
+  }
 
   if (!dashboard) return <p className="text-sm text-slate-500">Loading...</p>;
 
@@ -148,30 +83,45 @@ export default function DashboardEditPage() {
         <div className="flex items-center gap-3">
           {savingLayout && <span className="text-xs text-slate-500">Saving layout...</span>}
           <button
-            onClick={() => {
-              setEditingWidget({ id: null, saved_query_id: "", metric_id: "", chart_type: "bar", config: {} });
-              setWidgetType("query");
-              setWidgetConfig({
-                saved_query_id: queries[0]?.id || "",
-                metric_id: metrics[0]?.id || "",
-                chart_type: "bar",
-                x_field: "",
-                y_field: "",
-                horizon: 10,
-              });
-            }}
-            className="focus-ring rounded-lg bg-accent-gradient px-4 py-2 text-sm font-semibold text-white"
-          >
-            Add Widget
-          </button>
-          <button
             onClick={() => router.push(`/dashboards/${dashboard.id}`)}
-            className="focus-ring rounded-lg border border-white/10 px-4 py-2 text-sm font-medium hover:bg-white/5"
+            className="focus-ring rounded-lg bg-accent-gradient px-4 py-2 text-sm font-semibold text-white"
           >
             Done
           </button>
         </div>
       </div>
+
+      <form onSubmit={handleAdd} className="glass mb-6 space-y-3 rounded-2xl p-5">
+        <p className="text-sm font-semibold">Add a widget</p>
+        <select
+          value={savedQueryId}
+          onChange={(e) => setSavedQueryId(e.target.value)}
+          className="focus-ring w-full rounded-lg border border-white/10 bg-base-900 px-3 py-2 text-sm outline-none"
+        >
+          {queries.map((q) => (
+            <option key={q.id} value={q.id}>
+              {q.name}
+            </option>
+          ))}
+        </select>
+        <select
+          value={chartType}
+          onChange={(e) => setChartType(e.target.value as ChartType)}
+          className="focus-ring w-full rounded-lg border border-white/10 bg-base-900 px-3 py-2 text-sm outline-none"
+        >
+          {CHART_TYPES.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+        <button
+          type="submit"
+          className="focus-ring w-full rounded-lg border border-white/10 px-4 py-2 text-sm font-medium hover:bg-white/5"
+        >
+          Add widget
+        </button>
+      </form>
 
       {error && (
         <div className="mb-4 rounded-lg border border-down/30 bg-down/10 px-3 py-2 text-sm text-down">
@@ -194,173 +144,23 @@ export default function DashboardEditPage() {
             onResizeStop={(l) => persistLayout(l as LayoutItem[])}
           >
             {dashboard.widgets.map((w) => (
-              <div key={w.id} className="glass flex flex-col overflow-hidden rounded-2xl p-4 relative">
+              <div key={w.id} className="glass flex flex-col overflow-hidden rounded-2xl p-4">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <p className="truncate text-xs font-medium text-slate-400">
-                    {w.saved_query_id
-                      ? (queries.find((q) => q.id === w.saved_query_id)?.name || w.saved_query_id)
-                      : w.metric_id
-                      ? (metrics.find((m) => m.id === w.metric_id)?.name || w.metric_id)
-                      : "Unknown"}{" "}
-                    · {w.chart_type}
+                    {queries.find((q) => q.id === w.saved_query_id)?.name ?? w.saved_query_id} · {w.chart_type}
                   </p>
-                  <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
-                    <button
-                      onClick={() => {
-                        setEditingWidget(w);
-                        const isMetric = !!w.metric_id;
-                        setWidgetType(isMetric ? "metric" : "query");
-                        setWidgetConfig({
-                          saved_query_id: w.saved_query_id || "",
-                          metric_id: w.metric_id || "",
-                          chart_type: w.chart_type,
-                          x_field: (w.config as any)?.x_field || "",
-                          y_field: (w.config as any)?.y_field || "",
-                          horizon: (w.config as any)?.horizon || 10,
-                        });
-                      }}
-                      className="p-1 text-slate-500 hover:text-white transition text-sm"
-                    >
-                      ⚙️
-                    </button>
-                    <button
-                      onClick={() => handleRemoveWidget(w.id)}
-                      className="p-1 text-slate-500 hover:text-red-400 transition text-sm"
-                    >
-                      ✕
-                    </button>
-                  </div>
+                  <button
+                    onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
+                    onClick={() => handleRemove(w.id)}
+                    className="focus-ring shrink-0 rounded-md border border-down/30 px-2 py-0.5 text-xs text-down hover:bg-down/10"
+                  >
+                    Remove
+                  </button>
                 </div>
               </div>
             ))}
           </Grid>
         </>
-      )}
-
-      {dashboard.widgets.length === 0 && (
-        <p className="text-sm text-slate-500">No widgets yet. Click "Add Widget" to start.</p>
-      )}
-
-      {editingWidget && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-base-900 p-6 rounded-2xl max-w-md w-full border border-white/10">
-            <h2 className="text-xl font-bold mb-4">
-              {editingWidget.id ? "Edit Widget" : "Add Widget"}
-            </h2>
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs text-slate-400 block mb-1">Data Source</label>
-                <div className="flex gap-2">
-                  <button
-                    className={`flex-1 px-3 py-1 text-sm rounded border ${widgetType === "query" ? "border-accent-blue bg-accent-blue/20 text-white" : "border-white/10 text-slate-400"}`}
-                    onClick={() => setWidgetType("query")}
-                  >
-                    Saved Query
-                  </button>
-                  <button
-                    className={`flex-1 px-3 py-1 text-sm rounded border ${widgetType === "metric" ? "border-accent-blue bg-accent-blue/20 text-white" : "border-white/10 text-slate-400"}`}
-                    onClick={() => setWidgetType("metric")}
-                  >
-                    Metric
-                  </button>
-                </div>
-              </div>
-
-              {widgetType === "query" ? (
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">Saved Query</label>
-                  <select
-                    value={widgetConfig.saved_query_id}
-                    onChange={(e) => setWidgetConfig({...widgetConfig, saved_query_id: e.target.value})}
-                    className="w-full p-2 border border-white/10 rounded bg-base-800 text-white text-sm"
-                  >
-                    <option value="">Select a query</option>
-                    {queries.map((q) => (
-                      <option key={q.id} value={q.id}>{q.name}</option>
-                    ))}
-                  </select>
-                </div>
-              ) : (
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">Metric</label>
-                  <select
-                    value={widgetConfig.metric_id}
-                    onChange={(e) => setWidgetConfig({...widgetConfig, metric_id: e.target.value})}
-                    className="w-full p-2 border border-white/10 rounded bg-base-800 text-white text-sm"
-                  >
-                    <option value="">Select a metric</option>
-                    {metrics.map((m) => (
-                      <option key={m.id} value={m.id}>{m.name}</option>
-                    ))}
-                  </select>
-                  {metrics.length === 0 && (
-                    <p className="text-xs text-slate-500 mt-1">No metrics found. Create one in the Semantic Layer.</p>
-                  )}
-                </div>
-              )}
-
-              <div>
-                <label className="text-xs text-slate-400 block mb-1">Chart Type</label>
-                <select
-                  value={widgetConfig.chart_type}
-                  onChange={(e) => setWidgetConfig({...widgetConfig, chart_type: e.target.value as ChartType})}
-                  className="w-full p-2 border border-white/10 rounded bg-base-800 text-white text-sm"
-                >
-                  {CHART_TYPES.map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs text-slate-400 block mb-1">X‑axis Field</label>
-                <input
-                  placeholder="e.g. product"
-                  value={widgetConfig.x_field}
-                  onChange={(e) => setWidgetConfig({...widgetConfig, x_field: e.target.value})}
-                  className="w-full p-2 border border-white/10 rounded bg-base-800 text-white text-sm"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-slate-400 block mb-1">Y‑axis Field</label>
-                <input
-                  placeholder="e.g. sales_count"
-                  value={widgetConfig.y_field}
-                  onChange={(e) => setWidgetConfig({...widgetConfig, y_field: e.target.value})}
-                  className="w-full p-2 border border-white/10 rounded bg-base-800 text-white text-sm"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-slate-400 block mb-1">Forecast Horizon (steps)</label>
-                <input
-                  type="number"
-                  placeholder="10"
-                  value={widgetConfig.horizon || 10}
-                  onChange={(e) =>
-                    setWidgetConfig({
-                      ...widgetConfig,
-                      horizon: parseInt(e.target.value) || 10,
-                    })
-                  }
-                  className="w-full p-2 border border-white/10 rounded bg-base-800 text-white text-sm"
-                />
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 mt-4">
-              <button
-                onClick={() => setEditingWidget(null)}
-                className="px-4 py-2 text-sm text-slate-400 hover:text-white"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSaveWidget}
-                className="bg-accent-gradient px-4 py-2 rounded text-white text-sm font-semibold"
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );

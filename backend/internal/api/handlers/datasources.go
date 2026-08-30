@@ -8,12 +8,10 @@ import (
 
 	"stickstock/backend/internal/api/middleware"
 	"stickstock/backend/internal/connectors"
-	"stickstock/backend/internal/crypto"
 )
 
 type DataSourceHandler struct {
-	DB             *sql.DB
-	EncryptionKey  string
+	DB *sql.DB
 }
 
 type createDataSourceRequest struct {
@@ -38,11 +36,13 @@ type dataSourceResponse struct {
 
 func (h *DataSourceHandler) List(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
+	log.Printf("List data sources for user: %s", userID)
 
 	rows, err := h.DB.QueryContext(r.Context(),
-		`SELECT id, name, kind, ssh_host, ssh_port, ssh_user FROM data_sources WHERE owner_id = $1 ORDER BY created_at DESC`, userID)
+		`SELECT id, name, kind, COALESCE(ssh_host, ''), COALESCE(ssh_port, 0), COALESCE(ssh_user, '') FROM data_sources WHERE owner_id = $1 ORDER BY created_at DESC`, userID)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "could not list data sources")
+		log.Printf("Query error: %v", err)
+		writeJSONError(w, http.StatusInternalServerError, "could not read data sources: "+err.Error())
 		return
 	}
 	defer rows.Close()
@@ -51,12 +51,14 @@ func (h *DataSourceHandler) List(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var d dataSourceResponse
 		if err := rows.Scan(&d.ID, &d.Name, &d.Kind, &d.SSHHost, &d.SSHPort, &d.SSHUser); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, "could not read data sources")
+			log.Printf("Scan error: %v", err)
+			writeJSONError(w, http.StatusInternalServerError, "could not read data sources: "+err.Error())
 			return
 		}
 		out = append(out, d)
 	}
 
+	log.Printf("Found %d data sources", len(out))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
 }
@@ -79,17 +81,6 @@ func (h *DataSourceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.EncryptionKey == "" {
-		writeJSONError(w, http.StatusInternalServerError, "encryption key not configured")
-		return
-	}
-
-	encryptedDSN, err := crypto.Encrypt(h.EncryptionKey, req.DSN)
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "failed to encrypt credentials")
-		return
-	}
-
 	conn, err := connectors.NewWithSSH(req.Kind, req.DSN, req.SSHHost, req.SSHPort, req.SSHUser, req.SSHPassword, req.SSHPrivateKey)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -104,10 +95,11 @@ func (h *DataSourceHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var id string
 	err = h.DB.QueryRowContext(r.Context(),
 		`INSERT INTO data_sources (owner_id, name, kind, dsn) VALUES ($1, $2, $3, $4) RETURNING id`,
-		userID, req.Name, req.Kind, encryptedDSN,
+		userID, req.Name, req.Kind, req.DSN,
 	).Scan(&id)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "could not save data source")
+		log.Printf("Insert error: %v", err)
+		writeJSONError(w, http.StatusInternalServerError, "could not save data source: "+err.Error())
 		return
 	}
 

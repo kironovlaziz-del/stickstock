@@ -18,7 +18,7 @@ import type {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
 
-// 🔑 Кастомная авторизация: читаем токен из localStorage
+// 🔑 Custom authentication: read token from localStorage
 async function authHeader(): Promise<Record<string, string>> {
   let token = null;
   if (typeof window !== "undefined") {
@@ -34,7 +34,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     ...(init.headers ?? {}),
   };
 
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: "include" });
 
   if (!res.ok) {
     let message = `request failed with status ${res.status}`;
@@ -63,7 +63,7 @@ async function downloadBlob(path: string, init: RequestInit, filenameFallback: s
     ...(init.headers ?? {}),
   };
 
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: "include" });
   if (!res.ok) {
     let message = `export failed with status ${res.status}`;
     try {
@@ -93,6 +93,19 @@ async function downloadBlob(path: string, init: RequestInit, filenameFallback: s
 export type ExportFormat = "csv" | "xlsx" | "pdf";
 
 export const api = {
+  // ── Template endpoints ──────────────────────────────────────────
+  renderTemplate: (template: string, context: Record<string, unknown>) =>
+    request<{ rendered_sql: string; params: Record<string, unknown> }>("/template/render", {
+      method: "POST",
+      body: JSON.stringify({ template, context }),
+    }),
+
+  validateTemplate: (template: string) =>
+    request<{ valid: boolean; error?: string }>("/template/validate", {
+      method: "POST",
+      body: JSON.stringify({ template }),
+    }),
+
   me: () => request<Profile>("/me"),
   updateLocale: (locale: string) =>
     request<void>("/me", { method: "PUT", body: JSON.stringify({ locale }) }),
@@ -116,7 +129,7 @@ export const api = {
   deleteQuery: (id: string) => request<void>(`/queries/${id}`, { method: "DELETE" }),
   queryVersions: (id: string) => request<QueryVersion[]>(`/queries/${id}/versions`),
   runAdHoc: (body: { data_source_id: string; sql: string; params?: Record<string, unknown> }) =>
-    request<QueryResult>("/queries/run", { method: "POST", body: JSON.stringify(body) }),
+    request<QueryResult>("/queries/run", { method: "POST", body: JSON.stringify({ data_source_id: body.data_source_id, sql: body.sql, params: body.params || {} }) }),
   runSaved: (id: string, params?: Record<string, unknown>) =>
     request<QueryResult>(`/queries/${id}/run`, {
       method: "POST",

@@ -14,16 +14,16 @@ func NewRouter(cfg *config.Config, database *sql.DB) http.Handler {
 	mux := http.NewServeMux()
 
 	// ── Handlers ──────────────────────────────────────────────────
-	dsHandler := &handlers.DataSourceHandler{DB: database, EncryptionKey: cfg.EncryptionKey}
-	queryHandler := &handlers.QueryHandler{DB: database, EncryptionKey: cfg.EncryptionKey}
+	dsHandler := &handlers.DataSourceHandler{DB: database}
+	queryHandler := &handlers.QueryHandler{DB: database}
 	dashboardHandler := &handlers.DashboardHandler{DB: database}
-	profileHandler := &handlers.ProfileHandler{DB: database, EncryptionKey: cfg.EncryptionKey, ProfilerURL: "http://data-profiler:8082"}
-    metricHandler := &handlers.MetricHandler{DB: database, EncryptionKey: cfg.EncryptionKey, SemanticURL: "http://semantic-layer:8083"}
-    semanticHandler := &handlers.SemanticHandler{SemanticURL: "http://semantic-layer:8083"}
+	profileHandler := &handlers.ProfileHandler{DB: database, ProfilerURL: "http://data-profiler:8082"}
+	metricHandler := &handlers.MetricHandler{DB: database, SemanticURL: "http://semantic-layer:8083"}
+	semanticHandler := &handlers.SemanticHandler{SemanticURL: "http://semantic-layer:8083"}
 	fileHandler := &handlers.FileHandler{DB: database, DatabaseURL: cfg.DatabaseURL}
 	reportHandler := &handlers.ReportHandler{DB: database}
-	exportHandler := &handlers.ExportHandler{DB: database, EncryptionKey: cfg.EncryptionKey}
-	schemaHandler := &handlers.SchemaHandler{DB: database, EncryptionKey: cfg.EncryptionKey}
+	exportHandler := &handlers.ExportHandler{DB: database}
+	schemaHandler := &handlers.SchemaHandler{DB: database}
 	lineageHandler := &handlers.LineageHandler{DB: database}
 	commentHandler := &handlers.CommentHandler{DB: database}
 	authHandler := &handlers.AuthHandler{
@@ -36,6 +36,11 @@ func NewRouter(cfg *config.Config, database *sql.DB) http.Handler {
 	analyticsTaskHandler := &handlers.AnalyticsTaskHandler{
 		DB:                  database,
 		AnalyticsServiceURL: cfg.AnalyticsServiceURL,
+	}
+
+	// ── Metadata Service Proxy ──────────────────────────────────
+	metadataProxy := &handlers.MetadataProxy{
+		MetadataURL: "http://metadata-service:8084",
 	}
 
 	// ── Middleware factories ─────────────────────────────────────
@@ -87,7 +92,6 @@ func NewRouter(cfg *config.Config, database *sql.DB) http.Handler {
 
 	mux.Handle("GET /api/lineage", auth(http.HandlerFunc(lineageHandler.Get)))
 
-
 	mux.Handle("POST /api/reports", auth(http.HandlerFunc(reportHandler.Create)))
 	mux.Handle("GET /api/reports", auth(http.HandlerFunc(reportHandler.List)))
 	mux.Handle("PUT /api/reports/{id}", auth(http.HandlerFunc(reportHandler.Update)))
@@ -108,17 +112,22 @@ func NewRouter(cfg *config.Config, database *sql.DB) http.Handler {
 	mux.Handle("POST /api/analytics/tasks", auth(http.HandlerFunc(analyticsTaskHandler.CreateTask)))
 	mux.Handle("GET /api/analytics/tasks/{id}", auth(http.HandlerFunc(analyticsTaskHandler.GetTask)))
 
+	// ── Template routes (Jinja2 SQL templating) ──────────────────
+	mux.Handle("POST /api/template/render", auth(http.HandlerFunc(metadataProxy.RenderTemplate)))
+	mux.Handle("POST /api/template/validate", auth(http.HandlerFunc(metadataProxy.ValidateTemplate)))
+
 	// ── Global middleware chain ──────────────────────────────────
-    mux.Handle("POST /api/datasources/{id}/profile", auth(http.HandlerFunc(profileHandler.ProfileDataSource)))
-    mux.Handle("GET /api/semantic/metrics", auth(http.HandlerFunc(semanticHandler.ListMetrics)))
-    mux.Handle("GET /api/semantic/metrics/{id}/run", auth(http.HandlerFunc(metricHandler.RunMetric)))
-    mux.Handle("POST /api/semantic/metrics", auth(http.HandlerFunc(semanticHandler.CreateMetric)))
-    mux.Handle("GET /api/semantic/metrics/{id}", auth(http.HandlerFunc(semanticHandler.GetMetric)))
-    mux.Handle("DELETE /api/semantic/metrics/{id}", auth(http.HandlerFunc(semanticHandler.DeleteMetric)))
-    mux.Handle("GET /api/semantic/datasets", auth(http.HandlerFunc(semanticHandler.ListDatasets)))
-    mux.Handle("POST /api/semantic/datasets", auth(http.HandlerFunc(semanticHandler.CreateDataset)))
-    mux.Handle("GET /api/semantic/datasets/{id}", auth(http.HandlerFunc(semanticHandler.GetDataset)))
-    mux.Handle("DELETE /api/semantic/datasets/{id}", auth(http.HandlerFunc(semanticHandler.DeleteDataset)))
+	mux.Handle("POST /api/datasources/{id}/profile", auth(http.HandlerFunc(profileHandler.ProfileDataSource)))
+	mux.Handle("GET /api/semantic/metrics", auth(http.HandlerFunc(semanticHandler.ListMetrics)))
+	mux.Handle("GET /api/semantic/metrics/{id}/run", auth(http.HandlerFunc(metricHandler.RunMetric)))
+	mux.Handle("POST /api/semantic/metrics", auth(http.HandlerFunc(semanticHandler.CreateMetric)))
+	mux.Handle("GET /api/semantic/metrics/{id}", auth(http.HandlerFunc(semanticHandler.GetMetric)))
+	mux.Handle("DELETE /api/semantic/metrics/{id}", auth(http.HandlerFunc(semanticHandler.DeleteMetric)))
+	mux.Handle("GET /api/semantic/datasets", auth(http.HandlerFunc(semanticHandler.ListDatasets)))
+	mux.Handle("POST /api/semantic/datasets", auth(http.HandlerFunc(semanticHandler.CreateDataset)))
+	mux.Handle("GET /api/semantic/datasets/{id}", auth(http.HandlerFunc(semanticHandler.GetDataset)))
+	mux.Handle("DELETE /api/semantic/datasets/{id}", auth(http.HandlerFunc(semanticHandler.DeleteDataset)))
+
 	handler := middleware.Locale(cfg.DefaultLocale)(mux)
 	handler = middleware.AuditMiddleware(database)(handler)
 	handler = corsMiddleware(cfg.AllowedOrigins)(handler)

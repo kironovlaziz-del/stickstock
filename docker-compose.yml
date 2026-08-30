@@ -1,15 +1,3 @@
-version: "3.9"
-
-# Metadata storage is Supabase (managed Postgres + Auth), not a local
-# container — see README "Architecture". That's the deliberate choice for
-# a 4GB RAM / 2 CPU VPS: running Postgres + Redis locally alongside the Go
-# backend, the Python analytics service, and (later) a Next.js frontend
-# would be tight on this box. Supabase also gives OAuth (Google/GitHub)
-# for free, which a hand-rolled auth system doesn't.
-#
-# No Redis: the "cache" table in the same Supabase Postgres instance
-# covers it (see backend/internal/cache and migrations/0003_cache.sql).
-
 services:
   backend:
     build: ./backend
@@ -18,9 +6,6 @@ services:
     environment:
       ANALYTICS_SERVICE_URL: http://analytics-service:8000
     networks: [internal]
-    # DATABASE_URL and JWT_SECRET come from .env — DATABASE_URL is your
-    # Supabase project's Postgres connection string (Settings → Database),
-    # JWT_SECRET is the Supabase project's JWT secret (Settings → API).
 
   analytics-service:
     build: ./analytics-service
@@ -29,24 +14,21 @@ services:
     networks: [internal]
     environment:
       UPLOAD_DIR: /data/uploads
-    # No external API keys needed — Polars/DuckDB/statsmodels/PyOD all run
-    # locally in this container.
+
   semantic-layer:
     build: ./semantic-layer
     restart: unless-stopped
     networks: [internal]
     environment:
       DATABASE_URL: ${DATABASE_URL}
+
   frontend:
     build:
       context: ./frontend
       args:
-        # NEXT_PUBLIC_* vars get baked into the client bundle at build
-        # time, not read at runtime — that's why these are build args
-        # rather than just `env_file: .env` like the other services.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
         NEXT_PUBLIC_SUPABASE_URL: ${SUPABASE_URL}
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
-        NEXT_PUBLIC_API_BASE_URL: /api
     restart: unless-stopped
     networks: [internal]
 
@@ -59,6 +41,7 @@ services:
     build: ./ssh-tunnel-service
     restart: unless-stopped
     networks: [internal]
+
   nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped
@@ -72,9 +55,24 @@ services:
     depends_on: [backend, frontend]
     networks: [internal]
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [internal]
+    volumes:
+      - redis_data:/data
+
+  metadata-service:
+    build: ./metadata-service
+    restart: unless-stopped
+    networks: [internal]
+    environment:
+      METADATA_REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+
 networks:
   internal:
 
 volumes:
-  certbot_www:
-  certbot_certs:
+  redis_data:

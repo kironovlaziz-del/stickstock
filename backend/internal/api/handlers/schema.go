@@ -11,7 +11,6 @@ import (
 
 type SchemaHandler struct {
 	DB             *sql.DB
-	EncryptionKey  string
 }
 
 // Get returns the tables/collections and columns a data source exposes,
@@ -20,7 +19,7 @@ func (h *SchemaHandler) Get(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
 	id := r.PathValue("id")
 
-	kind, dsn, _, err := dataSourceForOwner(r.Context(), h.DB, id, userID, h.EncryptionKey)
+	kind, dsn, _, err := dataSourceForOwner(r.Context(), h.DB, id, userID)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "data source not found")
 		return

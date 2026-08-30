@@ -19,13 +19,13 @@ var allowedChartTypes = map[string]bool{
 	"line": true, "bar": true, "pie": true, "scatter": true,
 	"table": true, "heatmap": true, "boxplot": true, "treemap": true,
 	"kpi": true, "forecast": true,
+	"combo": true, "radar": true, "funnel": true, "waterfall": true,
+	"bubble": true, "stackedbar": true,
 }
 
 type DashboardHandler struct {
 	DB *sql.DB
 }
-
-// ── Types ──────────────────────────────────────────────────────────
 
 type dashboardSummary struct {
 	ID        string    `json:"id"`
@@ -75,8 +75,6 @@ func dashboardRole(ctx context.Context, db *sql.DB, dashboardID, userID string) 
 }
 
 func canEdit(role string) bool { return role == "owner" || role == "editor" }
-
-// ── Dashboard CRUD ──────────────────────────────────────────────
 
 type createDashboardRequest struct {
 	Name   string          `json:"name"`
@@ -271,8 +269,6 @@ func (h *DashboardHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ── Widgets ─────────────────────────────────────────────────────────
-
 type addWidgetRequest struct {
 	SavedQueryID string          `json:"saved_query_id"`
 	MetricID     string          `json:"metric_id"`
@@ -283,7 +279,6 @@ type addWidgetRequest struct {
 func (h *DashboardHandler) AddWidget(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
 	dashboardID := r.PathValue("id")
-	log.Printf("AddWidget: userID=%s, dashboardID=%s", userID, dashboardID)
 
 	role, err := dashboardRole(r.Context(), h.DB, dashboardID, userID)
 	if err != nil || !canEdit(role) {
@@ -293,11 +288,9 @@ func (h *DashboardHandler) AddWidget(w http.ResponseWriter, r *http.Request) {
 
 	var req addWidgetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Printf("AddWidget: decode error: %v", err)
 		writeJSONError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	log.Printf("AddWidget: req=%+v", req)
 	if req.ChartType == "" {
 		writeJSONError(w, http.StatusBadRequest, "chart_type is required")
 		return
@@ -311,7 +304,7 @@ func (h *DashboardHandler) AddWidget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !allowedChartTypes[req.ChartType] {
-		writeJSONError(w, http.StatusBadRequest, "unsupported chart_type")
+		writeJSONError(w, http.StatusBadRequest, "unsupported chart_type: "+req.ChartType)
 		return
 	}
 
@@ -349,7 +342,6 @@ func (h *DashboardHandler) AddWidget(w http.ResponseWriter, r *http.Request) {
 		).Scan(&widgetID)
 	}
 	if insertErr != nil {
-		log.Printf("AddWidget: insert error: %v", insertErr)
 		writeJSONError(w, http.StatusInternalServerError, "could not add widget: "+insertErr.Error())
 		return
 	}
@@ -484,8 +476,6 @@ func (h *DashboardHandler) DeleteWidget(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ── Collaborators ──────────────────────────────────────────────────
-
 type collaboratorResponse struct {
 	UserID string `json:"user_id"`
 	Email  string `json:"email"`
@@ -594,8 +584,6 @@ func (h *DashboardHandler) RemoveCollaborator(w http.ResponseWriter, r *http.Req
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
-
-// ── Sharing ──────────────────────────────────────────────────────
 
 func randomShareToken() (string, error) {
 	b := make([]byte, 24)

@@ -50,10 +50,17 @@ export type ChartType =
   | "scatter"
   | "treemap"
   | "kpi"
-  | "forecast";
+  | "forecast"
+  | "combo"
+  | "radar"
+  | "funnel"
+  | "waterfall"
+  | "bubble"
+  | "stackedbar"
+  | "area";
 
 export interface LayoutItem {
-  i: string; // widget id
+  i: string;
   x: number;
   y: number;
   w: number;

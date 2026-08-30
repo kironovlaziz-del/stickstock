@@ -21,6 +21,7 @@ type PublicHandler struct {
 }
 
 type publicDashboardResponse struct {
+	ID      string           `json:"id"`
 	Name    string           `json:"name"`
 	Layout  json.RawMessage  `json:"layout"`
 	Widgets []widgetResponse `json:"widgets"`
@@ -93,6 +94,7 @@ func (h *PublicHandler) GetDashboard(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusGone, "share link has expired")
 		return
 	}
+	resp.ID = dashboardID
 	resp.Layout = layoutBytes
 
 	rows, err := h.DB.QueryContext(r.Context(),

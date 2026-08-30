@@ -11,9 +11,10 @@ import (
 	"stickstock/backend/internal/export"
 )
 
+const MAX_EXPORT_ROWS = 50000
+
 type ExportHandler struct {
-	DB             *sql.DB
-	EncryptionKey  string
+	DB *sql.DB
 }
 
 var exportContentTypes = map[string]string{
@@ -31,12 +32,10 @@ func sanitizeFilename(name string) string {
 	return s
 }
 
-// streamExport writes result in the requested format directly to w,
-// setting headers first so the browser treats it as a download. Once
-// writing has started there's no clean way to report a mid-stream error
-// as JSON — the format-specific writers return early on error, so a
-// failure just produces a truncated file rather than a corrupt one.
 func streamExport(w http.ResponseWriter, format, filenameBase, title string, result *runResponse) {
+	if len(result.Rows) > MAX_EXPORT_ROWS {
+		result.Rows = result.Rows[:MAX_EXPORT_ROWS]
+	}
 	contentType, ok := exportContentTypes[format]
 	if !ok {
 		writeJSONError(w, http.StatusBadRequest, `format must be "csv", "xlsx", or "pdf"`)
@@ -57,8 +56,6 @@ func streamExport(w http.ResponseWriter, format, filenameBase, title string, res
 	}
 }
 
-// ExportSaved streams a saved query's live results: GET
-// /api/queries/{id}/export?format=csv|xlsx|pdf
 func (h *ExportHandler) ExportSaved(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
 	id := r.PathValue("id")
@@ -72,15 +69,12 @@ func (h *ExportHandler) ExportSaved(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// h.EncryptionKey 
-	kind, dsn, _, err := dataSourceForOwner(r.Context(), h.DB, dataSourceID, userID, h.EncryptionKey)
+	kind, dsn, _, err := dataSourceForOwner(r.Context(), h.DB, dataSourceID, userID)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "data source not found")
 		return
 	}
 
-	// Saved queries were already validated at creation/update time (see
-	// queries.go) — no need to re-validate before exporting.
 	result, err := execute(r.Context(), kind, dsn, sqlText, nil)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -97,7 +91,6 @@ type exportAdHocRequest struct {
 	Title        string `json:"title"`
 }
 
-// ExportAdHoc exports unsaved SQL/query-DSL text: POST /api/export/query
 func (h *ExportHandler) ExportAdHoc(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
 
@@ -107,7 +100,7 @@ func (h *ExportHandler) ExportAdHoc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	kind, dsn, fileTable, err := dataSourceForOwner(r.Context(), h.DB, req.DataSourceID, userID, h.EncryptionKey)
+	kind, dsn, fileTable, err := dataSourceForOwner(r.Context(), h.DB, req.DataSourceID, userID)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "data source not found")
 		return

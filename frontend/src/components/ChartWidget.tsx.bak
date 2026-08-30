@@ -196,7 +196,7 @@ export default function ChartWidget({ result, chartType }: { result: QueryResult
   const yKeys = restKeys.length > 0 ? restKeys : [xKey];
   const XA = <XAxis dataKey={xKey} stroke="#8b93a7" fontSize={11} tick={{ fill: "#8b93a7" }} />;
   const YA = <YAxis stroke="#8b93a7" fontSize={11} width={42} tick={{ fill: "#8b93a7" }} tickFormatter={v => fmt(v) ?? String(v)} />;
-  const TIP = <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: unknown) => String(fmt(v) ?? v)} />;
+  const TIP = <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: unknown) => [fmt(v) ?? v, ""]} />;
 
   function wrap(chart: React.ReactNode) {
     return (
@@ -332,7 +332,7 @@ export default function ChartWidget({ result, chartType }: { result: QueryResult
           <YAxis type="number" dataKey="y" name={yKeys[0]} stroke="#8b93a7" fontSize={11} width={42} tickFormatter={v => fmt(v) ?? v} />
           <ZAxis type="number" dataKey="z" range={[50, 500]} name={zKey} />
           <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ strokeDasharray: "3 3" }}
-            formatter={(v: unknown, name: string) => String(fmt(v) ?? v)} />
+            formatter={(v: unknown, name: string) => [fmt(v) ?? v, name]} />
           <Scatter data={bubbleData} fill={PALETTE[0]} fillOpacity={0.75}>
             {showLabels && <LabelList dataKey="name" position="top" style={LABEL_STYLE} />}
           </Scatter>
@@ -373,7 +373,7 @@ export default function ChartWidget({ result, chartType }: { result: QueryResult
     return wrap(
       <ResponsiveContainer width="100%" height={H}>
         <FunnelChart margin={{ top: 10, right: 10, bottom: 10, left: 10 }}>
-          <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: unknown) => String(fmt(v) ?? v)} />
+          <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: unknown) => [fmt(v) ?? v, ""]} />
           <Funnel dataKey="value" data={funnelData} isAnimationActive>
             <LabelList position="center" fill="#fff" fontSize={12} dataKey="name" />
             <LabelList position="right" fill="#8b93a7" fontSize={11} dataKey="value" formatter={fmt} />
@@ -441,7 +441,7 @@ export default function ChartWidget({ result, chartType }: { result: QueryResult
       if (width < 30 || height < 20) return null;
       return (
         <g>
-          <rect x={x} y={y} width={width} height={height} style={{ fill: PALETTE[(name ? name.charCodeAt(0) : 0) % PALETTE.length], stroke: "#0d1117", strokeWidth: 2 }} rx={4} />
+          <rect x={x} y={y} width={width} height={height} style={{ fill: PALETTE[name?.charCodeAt(0) % PALETTE.length ?? 0], stroke: "#0d1117", strokeWidth: 2 }} rx={4} />
           {height > 30 && <text x={x+width/2} y={y+height/2-6} textAnchor="middle" fill="#fff" fontSize={11} fontWeight={600}>{name}</text>}
           {height > 44 && <text x={x+width/2} y={y+height/2+10} textAnchor="middle" fill="rgba(255,255,255,0.7)" fontSize={10}>{fmt(value)}</text>}
         </g>
@@ -450,7 +450,7 @@ export default function ChartWidget({ result, chartType }: { result: QueryResult
     return wrap(
       <ResponsiveContainer width="100%" height={H}>
         <Treemap data={tmData} dataKey="size" aspectRatio={4/3} content={<CustomContent />}>
-          <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: unknown) => String(fmt(v) ?? v)} />
+          <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: unknown) => [fmt(v) ?? v, ""]} />
         </Treemap>
       </ResponsiveContainer>
     );

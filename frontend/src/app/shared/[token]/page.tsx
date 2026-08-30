@@ -8,11 +8,13 @@ import "react-resizable/css/styles.css";
 import type { QueryResult, Widget, LayoutItem } from "@/lib/types";
 import { mergeLayout, GRID_COLS } from "@/lib/dashboardLayout";
 import ChartWidget from "@/components/ChartWidget";
+import CommentThread from "@/components/CommentThread";
 
 const Grid = WidthProvider(GridLayout);
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
 
 interface PublicDashboard {
+  id: string;
   name: string;
   layout: LayoutItem[];
   widgets: Widget[];
@@ -76,10 +78,8 @@ export default function SharedDashboardPage() {
     <main className="min-h-screen bg-base-950 p-6 text-slate-100">
       <div className="mx-auto max-w-6xl">
         <div className="mb-6 flex items-center gap-2">
-          <div className="h-6 w-6 rounded-md bg-accent-gradient" />
-          <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            Shared dashboard — read-only
-          </span>
+          <img src="/logotip.png" alt="Stickstock" style={{height:"32px",objectFit:"contain"}} />
+<span className="text-xs font-medium uppercase tracking-wide text-slate-500">Shared — read only</span>
         </div>
         <h1 className="mb-6 text-2xl font-extrabold tracking-tight">{dashboard.name}</h1>
 
@@ -90,19 +90,20 @@ export default function SharedDashboardPage() {
             className="layout"
             layout={layout}
             cols={GRID_COLS}
-            rowHeight={70}
+            rowHeight={80}
             margin={[16, 16]}
             isDraggable={false}
             isResizable={false}
           >
             {dashboard.widgets.map((w) => (
-              <div key={w.id} className="glass overflow-hidden rounded-2xl p-5">
+              <div key={w.id} className="glass rounded-2xl p-5 flex flex-col">
                 <p className="mb-3 text-xs font-medium uppercase tracking-wide text-slate-400">{w.chart_type}</p>
                 {results[w.id] ? (
                   <ChartWidget result={results[w.id]} chartType={w.chart_type} />
                 ) : (
                   <p className="text-sm text-slate-500">Loading...</p>
                 )}
+                <CommentThread dashboardId={dashboard.id} widgetId={w.id} readOnly />
               </div>
             ))}
           </Grid>

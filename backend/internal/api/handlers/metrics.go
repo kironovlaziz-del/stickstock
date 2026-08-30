@@ -14,7 +14,6 @@ import (
 
 type MetricHandler struct {
 	DB             *sql.DB
-	EncryptionKey  string
 	SemanticURL    string
 }
 
@@ -51,7 +50,7 @@ func (h *MetricHandler) RunMetric(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Проверяем, что источник принадлежит пользователю
-	kind, dsn, _, err := dataSourceForOwner(r.Context(), h.DB, metric.DataSourceID, userID, h.EncryptionKey)
+	kind, dsn, _, err := dataSourceForOwner(r.Context(), h.DB, metric.DataSourceID, userID)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "data source not found")
 		return

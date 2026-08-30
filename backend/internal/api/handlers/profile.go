@@ -16,7 +16,6 @@ import (
 
 type ProfileHandler struct {
 	DB             *sql.DB
-	EncryptionKey  string
 	ProfilerURL    string
 }
 
@@ -63,7 +62,7 @@ func (h *ProfileHandler) ProfileDataSource(w http.ResponseWriter, r *http.Reques
 		req.SampleSize = 1000
 	}
 
-	kind, dsn, _, err := dataSourceForOwner(r.Context(), h.DB, id, userID, h.EncryptionKey)
+	kind, dsn, _, err := dataSourceForOwner(r.Context(), h.DB, id, userID)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "data source not found")
 		return

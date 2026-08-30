@@ -7,21 +7,20 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"stickstock/backend/internal/api/middleware"
 	"stickstock/backend/internal/cache"
 	"stickstock/backend/internal/connectors"
-	"stickstock/backend/internal/crypto"
 	"stickstock/backend/internal/queryengine"
 )
 
 type QueryHandler struct {
-	DB             *sql.DB
-	EncryptionKey  string
+	DB *sql.DB
 }
 
-const maxResultRows = 200
+const maxResultRows = 10000
 
 type runResponse struct {
 	Columns   []string        `json:"columns"`
@@ -29,7 +28,7 @@ type runResponse struct {
 	Truncated bool            `json:"truncated"`
 }
 
-func dataSourceForOwner(ctx context.Context, db *sql.DB, id, ownerID, encryptionKey string) (kind, dsn, fileTable string, err error) {
+func dataSourceForOwner(ctx context.Context, db *sql.DB, id, ownerID string) (kind, dsn, fileTable string, err error) {
 	var fileTableNull sql.NullString
 	err = db.QueryRowContext(ctx,
 		`SELECT kind, dsn, file_table FROM data_sources WHERE id = $1 AND owner_id = $2`, id, ownerID,
@@ -38,14 +37,7 @@ func dataSourceForOwner(ctx context.Context, db *sql.DB, id, ownerID, encryption
 		return "", "", "", err
 	}
 	fileTable = fileTableNull.String
-
-	if kind != string(connectors.KindFile) && dsn != "" {
-		decrypted, err := crypto.Decrypt(encryptionKey, dsn)
-		if err != nil {
-			return "", "", "", fmt.Errorf("failed to decrypt DSN for data source %s: %w", id, err)
-		}
-		dsn = decrypted
-	}
+	// DSN is stored as plaintext (no encryption)
 	return
 }
 
@@ -68,26 +60,41 @@ func validateQueryText(kind, fileTable, text string) error {
 }
 
 func execute(ctx context.Context, kind, dsn, queryText string, params map[string]interface{}) (*runResponse, error) {
+	// Log the incoming SQL for debugging
+	log.Printf("execute: SQL query = %s", queryText)
+	if strings.TrimSpace(queryText) == "" {
+		return nil, fmt.Errorf("SQL query is empty. Please enter a valid SQL statement.")
+	}
 	boundQuery := queryText
 	var args []interface{}
 
 	if connectors.IsSQLKind(kind) {
 		bound, boundArgs, err := queryengine.BindParams(queryText, params)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("parameter binding error: %w", err)
 		}
 		boundQuery, args = bound, boundArgs
 	}
 
 	conn, err := connectors.New(kind, dsn)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("connector error: %w", err)
 	}
 	defer conn.Close()
 
 	result, err := conn.Query(ctx, boundQuery, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query failed: %w", err)
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "relation") && strings.Contains(errMsg, "does not exist") {
+			return nil, fmt.Errorf("table or view does not exist. Please check that the table name is correct")
+		}
+		if strings.Contains(errMsg, "column") && strings.Contains(errMsg, "does not exist") {
+			return nil, fmt.Errorf("column does not exist. Please check that the column name is correct")
+		}
+		if strings.Contains(errMsg, "syntax error") {
+			return nil, fmt.Errorf("SQL syntax error: %s", errMsg)
+		}
+		return nil, fmt.Errorf("query failed: %s", errMsg)
 	}
 
 	resp := &runResponse{Columns: result.Columns, Rows: result.Rows}
@@ -113,7 +120,7 @@ func (h *QueryHandler) RunAdHoc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	kind, dsn, fileTable, err := dataSourceForOwner(r.Context(), h.DB, req.DataSourceID, userID, h.EncryptionKey)
+	kind, dsn, fileTable, err := dataSourceForOwner(r.Context(), h.DB, req.DataSourceID, userID)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "data source not found")
 		return
@@ -144,9 +151,10 @@ type savedQueryResponse struct {
 }
 
 type createSavedQueryRequest struct {
-	DataSourceID string `json:"data_source_id"`
-	Name         string `json:"name"`
-	SQLText      string `json:"sql_text"`
+	DataSourceID string          `json:"data_source_id"`
+	Name         string          `json:"name"`
+	SQLText      string          `json:"sql_text"`
+	Params       json.RawMessage `json:"params,omitempty"`
 }
 
 func (h *QueryHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -158,7 +166,7 @@ func (h *QueryHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	kind, _, fileTable, err := dataSourceForOwner(r.Context(), h.DB, req.DataSourceID, userID, h.EncryptionKey)
+	kind, _, fileTable, err := dataSourceForOwner(r.Context(), h.DB, req.DataSourceID, userID)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "data source not found")
 		return
@@ -175,11 +183,16 @@ func (h *QueryHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
+	paramsJSON := req.Params
+	if paramsJSON == nil {
+		paramsJSON = json.RawMessage("{}")
+	}
+
 	var id string
 	err = tx.QueryRowContext(r.Context(),
-		`INSERT INTO saved_queries (owner_id, data_source_id, name, sql_text, version)
-		 VALUES ($1, $2, $3, $4, 1) RETURNING id`,
-		userID, req.DataSourceID, req.Name, req.SQLText,
+		`INSERT INTO saved_queries (owner_id, data_source_id, name, sql_text, params, version)
+		 VALUES ($1, $2, $3, $4, $5, 1) RETURNING id`,
+		userID, req.DataSourceID, req.Name, req.SQLText, paramsJSON,
 	).Scan(&id)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "could not save query")
@@ -291,7 +304,7 @@ func (h *QueryHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "query not found")
 		return
 	}
-	kind, _, fileTable, err := dataSourceForOwner(r.Context(), h.DB, dataSourceID, userID, h.EncryptionKey)
+	kind, _, fileTable, err := dataSourceForOwner(r.Context(), h.DB, dataSourceID, userID)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "data source not found")
 		return
@@ -349,7 +362,6 @@ func (h *QueryHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ── Delete cache after update ──────────────────────────────
 	_ = cache.New(h.DB).Delete(r.Context(), "query:"+id)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -360,7 +372,6 @@ func (h *QueryHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserIDFromContext(r.Context())
 	id := r.PathValue("id")
 
-	// Delete cache
 	_ = cache.New(h.DB).Delete(r.Context(), "query:"+id)
 
 	res, err := h.DB.ExecContext(r.Context(),
@@ -446,7 +457,6 @@ func (h *QueryHandler) RunSaved(w http.ResponseWriter, r *http.Request) {
 	var req runSavedRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
-	// ── Cache check ──────────────────────────────────────────────────
 	cacheKey := "query:" + id
 	cacheStore := cache.New(h.DB)
 	var cachedResp runResponse
@@ -459,9 +469,10 @@ func (h *QueryHandler) RunSaved(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var dataSourceID, sqlText, queryOwnerID string
+	var paramsJSON []byte
 	if err := h.DB.QueryRowContext(r.Context(),
-		`SELECT data_source_id, sql_text, owner_id FROM saved_queries WHERE id = $1`, id,
-	).Scan(&dataSourceID, &sqlText, &queryOwnerID); err != nil {
+		`SELECT data_source_id, sql_text, owner_id, params FROM saved_queries WHERE id = $1`, id,
+	).Scan(&dataSourceID, &sqlText, &queryOwnerID, &paramsJSON); err != nil {
 		writeJSONError(w, http.StatusNotFound, "query not found")
 		return
 	}
@@ -474,7 +485,20 @@ func (h *QueryHandler) RunSaved(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	kind, dsn, _, err := dataSourceForOwner(r.Context(), h.DB, dataSourceID, queryOwnerID, h.EncryptionKey)
+	var storedParams map[string]interface{}
+	if len(paramsJSON) > 0 {
+		_ = json.Unmarshal(paramsJSON, &storedParams)
+	}
+	if req.Params == nil {
+		req.Params = make(map[string]interface{})
+	}
+	for k, v := range storedParams {
+		if _, exists := req.Params[k]; !exists {
+			req.Params[k] = v
+		}
+	}
+
+	kind, dsn, _, err := dataSourceForOwner(r.Context(), h.DB, dataSourceID, queryOwnerID)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "data source not found")
 		return
@@ -486,7 +510,6 @@ func (h *QueryHandler) RunSaved(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ── Save to cache ──────────────────────────────────────────────
 	_ = cacheStore.Set(r.Context(), cacheKey, resp, 5*time.Minute)
 
 	if _, err := h.DB.ExecContext(r.Context(),

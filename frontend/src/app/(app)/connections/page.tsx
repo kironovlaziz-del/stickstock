@@ -12,7 +12,7 @@ const DSN_PLACEHOLDERS: Record<string, string> = {
   postgres: "postgres://user:pass@host:5432/dbname",
   mysql: "user:pass@tcp(host:3306)/dbname",
   mongodb: "mongodb://user:pass@host:27017/dbname",
-  rest: 'http://demo-rest:80',
+  rest: "http://demo-rest:80",
 };
 
 export default function ConnectionsPage() {
@@ -25,23 +25,21 @@ export default function ConnectionsPage() {
   const [dsn, setDsn] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // SSH fields
   const [sshHost, setSshHost] = useState("");
   const [sshPort, setSshPort] = useState(22);
   const [sshUser, setSshUser] = useState("");
   const [sshPassword, setSshPassword] = useState("");
   const [sshPrivateKey, setSshPrivateKey] = useState("");
 
-  // Profile modal
   const [profileData, setProfileData] = useState<any>(null);
   const [profileTable, setProfileTable] = useState("");
   const [showProfile, setShowProfile] = useState(false);
 
-  // Copy feedback
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
+    setError(null);
     try {
       const data = await api.listDataSources();
       setSources(data);
@@ -89,6 +87,7 @@ export default function ConnectionsPage() {
 
   async function handleDelete(id: string) {
     if (!confirm("Delete this connection? All related queries will become non-functional.")) return;
+    setError(null);
     try {
       await api.deleteDataSource(id);
       await load();
@@ -100,6 +99,7 @@ export default function ConnectionsPage() {
   async function handleProfile(id: string, name: string) {
     const table = prompt(`Enter table name to profile for "${name}":`, "");
     if (!table) return;
+    setError(null);
     try {
       const result = await api.profileDataSource(id, table);
       setProfileData(result);
@@ -121,7 +121,10 @@ export default function ConnectionsPage() {
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-extrabold tracking-tight">Connections</h1>
         <button
-          onClick={() => setShowForm((s) => !s)}
+          onClick={() => {
+            setError(null);
+            setShowForm((s) => !s);
+          }}
           className="focus-ring rounded-lg bg-accent-gradient px-4 py-2 text-sm font-semibold text-white"
         >
           Add Connection
@@ -129,8 +132,14 @@ export default function ConnectionsPage() {
       </div>
 
       {error && (
-        <div className="mb-4 rounded-lg border border-down/30 bg-down/10 px-3 py-2 text-sm text-down">
-          {error}
+        <div className="mb-4 rounded-lg border border-down/30 bg-down/10 px-3 py-2 text-sm text-down flex items-center justify-between">
+          <span>{error}</span>
+          <button
+            onClick={() => setError(null)}
+            className="text-down hover:text-white transition text-sm ml-4"
+          >
+            ✕ Dismiss
+          </button>
         </div>
       )}
 
@@ -173,7 +182,6 @@ export default function ConnectionsPage() {
             />
           </div>
 
-          {/* SSH Section */}
           <details className="border-t border-white/10 pt-4">
             <summary className="cursor-pointer text-sm font-medium text-slate-400 hover:text-white">
               Advanced: SSH Tunnel
@@ -236,6 +244,13 @@ export default function ConnectionsPage() {
             className="focus-ring rounded-lg bg-accent-gradient px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
           >
             {saving ? "..." : "Save"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowForm(false)}
+            className="focus-ring rounded-lg border border-white/10 px-4 py-2 text-sm font-medium hover:bg-white/5"
+          >
+            Cancel
           </button>
         </form>
       )}
