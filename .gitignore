@@ -33,3 +33,5 @@ frontend/out/
 frontend/build/
 frontend/node_modules/
 stickstock_part_001.txt
+*.tar.gz
+*.zip
